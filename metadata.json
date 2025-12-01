@@ -1,0 +1,8 @@
+{
+  "name": "FitAI Coach",
+  "description": "An intelligent workout companion that uses AI to track reps, analyze form via camera, and provide personalized coaching.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
