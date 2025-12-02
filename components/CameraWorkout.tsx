@@ -1,112 +1,76 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { geminiService } from '../services/geminiService';
+import { KeyManager } from '../services/keyManager'; // [NEW] Safe Mode Support
 import { useAudio } from '../hooks/useAudio';
 import { LiveConnectionState, WorkoutSession } from '../types';
 import { MODEL_NAMES, SYSTEM_INSTRUCTIONS } from '../constants';
-import { Modality, LiveServerMessage } from '@google/genai';
-import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Eye, Settings } from 'lucide-react';
+import { Modality, LiveServerMessage, FunctionDeclaration, Type } from '@google/genai';
+import { EXERCISE_CATALOG } from '../utils/exerciseLogic';
+import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings, Scan, EyeOff, Coffee, MessageSquare } from 'lucide-react';
 
-// --- MediaPipe Types ---
+// Declare global Pose for CDN loaded script
 declare global {
   interface Window {
     Pose: any;
     Camera: any;
-    drawConnectors: any;
-    drawLandmarks: any;
-    POSE_CONNECTIONS: any;
   }
 }
 
-// --- Math Helpers ---
-const calculateAngle = (a: any, b: any, c: any) => {
-  const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
-  let angle = Math.abs(radians * 180.0 / Math.PI);
-  if (angle > 180.0) angle = 360 - angle;
-  return angle;
+// Tool Definition for the AI to report progress
+const workoutTool: FunctionDeclaration = {
+  name: 'updateWorkoutStats',
+  description: 'Call this function to update the user\'s workout statistics on the screen when a rep is completed or exercise changes.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      reps: { type: Type.NUMBER, description: 'The total number of reps completed for the current set.' },
+      exerciseDetected: { type: Type.STRING, description: 'The name of the exercise currently being performed.' },
+      feedback: { type: Type.STRING, description: 'Brief feedback string about form or encouragement.' },
+      score: { type: Type.NUMBER, description: 'Form quality score (0-100) for the last rep.' },
+    },
+    required: ['reps', 'exerciseDetected', 'feedback'],
+  },
 };
 
-// Simple low-pass filter to smooth out jittery landmarks
-const smoothValue = (newVal: number, oldVal: number, alpha: number = 0.5) => {
-  return oldVal * (1 - alpha) + newVal * alpha;
+const getWorkoutHistoryTool: FunctionDeclaration = {
+  name: 'getWorkoutHistory',
+  description: 'Call this function when the user asks about their performance, form, or history of the current session.',
+  parameters: { type: Type.OBJECT, properties: {} },
 };
 
-// --- Exercise Logic Definitions ---
-type ExerciseState = 'START' | 'MIDDLE' | 'COMPLETE';
-
-interface ExerciseConfig {
-  id: string;
-  name: string;
-  instructions: string;
-  calculateProgress: (landmarks: any) => { value: number, target: number, visualPoint?: any };
-  thresholds: { start: number, end: number, type: 'angle_min' | 'angle_max' | 'distance_max' | 'distance_min' };
-}
-
-const EXERCISE_CATALOG: Record<string, ExerciseConfig> = {
-  'Squats': {
-    id: 'Squats',
-    name: 'Squats',
-    instructions: "Stand sideways. Bend knees until thighs are parallel.",
-    // Metric: Knee Angle
-    calculateProgress: (lm) => {
-      const leftKnee = calculateAngle(lm[23], lm[25], lm[27]);
-      const rightKnee = calculateAngle(lm[24], lm[26], lm[28]);
-      return { value: (leftKnee + rightKnee) / 2, target: 90, visualPoint: lm[25] }; // Average knee angle
+const changeExerciseTool: FunctionDeclaration = {
+  name: 'changeExercise',
+  description: 'Call this function when the user asks to switch to a different exercise.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      exerciseName: { type: Type.STRING, description: 'The name of the new exercise (e.g. Squats, Pushups).' },
     },
-    thresholds: { start: 160, end: 100, type: 'angle_min' } // Start standing (180), go down (<100)
+    required: ['exerciseName'],
   },
-  'Pushups': {
-    id: 'Pushups',
-    name: 'Pushups',
-    instructions: "Plank position. Lower chest until elbows are 90°.",
-    // Metric: Elbow Angle
-    calculateProgress: (lm) => {
-      const leftElbow = calculateAngle(lm[11], lm[13], lm[15]);
-      const rightElbow = calculateAngle(lm[12], lm[14], lm[16]);
-      return { value: (leftElbow + rightElbow) / 2, target: 90, visualPoint: lm[13] };
-    },
-    thresholds: { start: 160, end: 90, type: 'angle_min' }
-  },
-  'Jumping Jacks': {
-    id: 'Jumping Jacks',
-    name: 'Jumping Jacks',
-    instructions: "Start feet together hands down. Jump feet apart hands up.",
-    // Metric: Wrist Y position relative to shoulder (Simple 'Hands Up' check)
-    calculateProgress: (lm) => {
-      // 11=L_Shoulder, 15=L_Wrist. If Wrist Y < Shoulder Y, hands are up (Y increases downwards)
-      const dist = (lm[11].y - lm[15].y) + (lm[12].y - lm[16].y); 
-      // dist > 0 means hands above shoulders. dist < 0 means hands below.
-      return { value: dist, target: 0.2, visualPoint: lm[11] }; 
-    },
-    thresholds: { start: -0.2, end: 0.1, type: 'distance_max' } // Start hands down, End hands up
-  },
-  'Lunges': {
-    id: 'Lunges',
-    name: 'Lunges',
-    instructions: "Step forward, lower hip until back knee is near ground.",
-    // Metric: Max bend of EITHER knee (since we alternate)
-    calculateProgress: (lm) => {
-      const leftKnee = calculateAngle(lm[23], lm[25], lm[27]);
-      const rightKnee = calculateAngle(lm[24], lm[26], lm[28]);
-      const activeLegAngle = Math.min(leftKnee, rightKnee);
-      return { value: activeLegAngle, target: 100, visualPoint: leftKnee < rightKnee ? lm[25] : lm[26] };
-    },
-    thresholds: { start: 160, end: 100, type: 'angle_min' }
-  },
-  'Crunches': {
-    id: 'Crunches',
-    name: 'Crunches',
-    instructions: "Lie on back. Curl shoulders towards knees.",
-    // Metric: Hip Angle
-    calculateProgress: (lm) => {
-      const leftHip = calculateAngle(lm[11], lm[23], lm[25]); 
-      return { value: leftHip, target: 60, visualPoint: lm[23] };
-    },
-    thresholds: { start: 130, end: 70, type: 'angle_min' } // Flat is ~180, curled is acute
-  }
 };
 
+const stopWorkoutTool: FunctionDeclaration = {
+  name: 'stopWorkout',
+  description: 'Call this function when the user wants to stop or end the workout session.',
+  parameters: { type: Type.OBJECT, properties: {} },
+};
 
-// --- Helper for creating PCM blob ---
+// Helper for blob to base64
+const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64data = reader.result as string;
+      // Remove data URL prefix
+      resolve(base64data.split(',')[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
+
+// Helper for creating PCM blob
 function createPcmBlob(data: Float32Array): { data: string, mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
@@ -127,402 +91,893 @@ function createPcmBlob(data: Float32Array): { data: string, mimeType: string } {
 
 interface CameraWorkoutProps {
   onSaveWorkout: (session: WorkoutSession) => void;
+  onFocusChange?: (isFocused: boolean) => void;
 }
 
-const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
+const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusChange }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [connectionState, setConnectionState] = useState<LiveConnectionState>(LiveConnectionState.DISCONNECTED);
-  
-  // Workout State
+  const [focusMode, setFocusMode] = useState(false);
+
+  // Helper to toggle focus
+  const toggleFocus = (active: boolean) => {
+    setFocusMode(active);
+    if (onFocusChange) onFocusChange(active);
+  };
   const [reps, setReps] = useState(0);
-  const [weight, setWeight] = useState(0);
-  const [exerciseId, setExerciseId] = useState<string>('Squats');
-  const [feedback, setFeedback] = useState("Align body");
-  const [repProgress, setRepProgress] = useState(0); // 0 to 100%
-  const [debugValue, setDebugValue] = useState(0);
-
+  const [exercise, setExercise] = useState('Squats');
+  const [feedback, setFeedback] = useState('');
+  const [lastRepScore, setLastRepScore] = useState<number | null>(null);
+  const [isResting, setIsResting] = useState(false);
+  const [restTime, setRestTime] = useState(60);
+  const [isSendingFrame, setIsSendingFrame] = useState(false);
+  const [activeSessionPromise, setActiveSessionPromise] = useState<Promise<any> | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [activeSession, setActiveSession] = useState<any>(null);
 
-  const { initializeAudio, decodeAndPlay, audioContext } = useAudio();
-  
-  // Refs for logic loop to avoid stale closures
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<string>('');
+  const [selectedMic, setSelectedMic] = useState<string>('');
+  const [sensitivity, setSensitivity] = useState(0); // -20 to +20 degrees
+
+  // Countdown State
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  const [countdown, setCountdown] = useState(3);
+  const [isTrackingActive, setIsTrackingActive] = useState(false);
+
+  const { initializeAudio, decodeAndPlay, stopAll, playDing, audioContext } = useAudio();
+
+  // Refs for loop management to avoid stale closures
+  const frameIntervalRef = useRef<number>();
   const isConnectedRef = useRef(false);
-  const poseRef = useRef<any>(null);
-  const cameraRef = useRef<any>(null);
-  const lastRepTime = useRef<number>(0);
-  const exerciseState = useRef<ExerciseState>('START');
-  const valueSmoothing = useRef<number>(180); // Init high
 
-  // IMPORTANT: State Refs for the loop
-  const repsRef = useRef(0);
-  const exerciseIdRef = useRef('Squats');
-  const activeSessionRef = useRef<any>(null);
+  // SYNC-TO-REF PATTERN (CRITICAL)
+  const repsRef = useRef(reps);
+  const exerciseRef = useRef(exercise);
+  const feedbackRef = useRef(feedback);
+  const exerciseStateRef = useRef({
+    stage: 'start',
+    lastFeedback: 0,
+    repStartTime: 0,
+    repDurations: [] as number[],
+    currentRepScore: 0
+  });
+  const sensitivityRef = useRef(sensitivity);
+  const sessionHistoryRef = useRef<{ time: string, type: 'rep' | 'warning', detail: string }[]>([]);
 
-  // Sync State to Refs
+  // Sync state to refs
+  useEffect(() => { repsRef.current = reps; }, [reps]);
+  useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
+  useEffect(() => { feedbackRef.current = feedback; }, [feedback]);
+  useEffect(() => { sensitivityRef.current = sensitivity; }, [sensitivity]);
+
+  // Rest Timer Effect
   useEffect(() => {
-    repsRef.current = reps;
-  }, [reps]);
+    let interval: NodeJS.Timeout;
+    if (isResting && restTime > 0) {
+      interval = setInterval(() => setRestTime(t => t - 1), 1000);
+    } else if (restTime === 0) {
+      setIsResting(false);
+      setRestTime(60);
+      playDing(); // Alert user rest is over
+    }
+    return () => clearInterval(interval);
+  }, [isResting, restTime, playDing]);
 
+  // Countdown Timer Effect
   useEffect(() => {
-    exerciseIdRef.current = exerciseId;
-  }, [exerciseId]);
+    let interval: NodeJS.Timeout;
+    if (isCountingDown && countdown > 0) {
+      interval = setInterval(() => {
+        setCountdown(c => {
+          if (c === 1) {
+            playDing(); // Final beep
+            setIsCountingDown(false);
+            setIsTrackingActive(true);
+            setFeedback('GO! Start your reps!');
 
-  useEffect(() => {
-    activeSessionRef.current = activeSession;
-  }, [activeSession]);
+            // Auto-dismiss "GO!" after 1 second
+            setTimeout(() => setCountdown(-1), 1000);
+            return 0;
+          }
+          playDing(); // Countdown beep
+          return c - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isCountingDown, countdown, playDing]);
 
-  const addLog = (msg: string) => {
-    setLogs(prev => [new Date().toLocaleTimeString().slice(0,8) + ': ' + msg, ...prev.slice(0, 4)]);
+  const startTracking = () => {
+    setReps(0); // Reset reps
+    exerciseStateRef.current = { stage: 'start', lastFeedback: 0, repStartTime: 0, repDurations: [], currentRepScore: 0 };
+    setCountdown(3);
+    setIsCountingDown(true);
+    setIsTrackingActive(false);
+    setFeedback('Get ready...');
   };
 
-  // --- Pose Processing Loop ---
-  // Defined BEFORE the useEffect that uses it
-  const processExerciseLogic = (landmarks: any[], ctx: CanvasRenderingContext2D) => {
-    // Use REF to get current exercise ID inside loop
-    const config = EXERCISE_CATALOG[exerciseIdRef.current];
-    if (!config) return;
+  const startRest = () => {
+    setIsResting(true);
+    // setRestTime(60); // REMOVE THIS HARDCODED VALUE
+    // We already have restTime state effectively setting the starting time?
+    // Actually, the restTime state IS the current countdown.
+    // If the user adjusted the slider, that's fine, but we need a "duration" state separate from "current time"
+    // OR we just rely on the slider setting the initial value, and then we countdown?
+    // Wait, the slider sets 'restTime'. If we countdown, we are mutating the state that the slider controls.
+    // We need a separate `restDuration` vs `restTimer`.
+    // FOR NOW: Let's assume the slider sets the DESIRED rest time.
+    // When we start rest, we shouldn't reset it to 60. We should just start the countdown from whatever it is?
+    // Or better: The slider changes a `defaultRestTime`. `restTime` is the countdown.
+    // Let's check the state definitions. Line 105: const [restTime, setRestTime] = useState(60);
+    // There is no separate default.
+    // FIX: When rest ends, we reset to 60. That's the problem. It resets to 60 instead of what user chose.
+    // Let's simplify: The slider sets `restTime`. When we click "Rest", we just start the timer.
+    // But we need to remember what the "reset" value should be.
+    // Let's add a ref or separate state for `targetRestTime`.
+  };
 
-    // A. Calculate Metric
-    const rawData = config.calculateProgress(landmarks);
-    
-    // B. Smooth Metric
-    valueSmoothing.current = smoothValue(rawData.value, valueSmoothing.current, 0.3);
-    const currentValue = valueSmoothing.current;
-    
-    // C. Draw Metric on Screen (Visual Feedback)
-    if (rawData.visualPoint) {
-      const x = rawData.visualPoint.x * ctx.canvas.width;
-      const y = rawData.visualPoint.y * ctx.canvas.height;
-      
-      ctx.fillStyle = "#FF0000"; 
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, 2 * Math.PI);
-      ctx.fill();
-      
-      ctx.font = "bold 24px Inter";
-      ctx.fillStyle = "#00FF00";
-      ctx.strokeStyle = "black";
-      ctx.lineWidth = 3;
-      const displayValue = Math.round(currentValue);
-      ctx.strokeText(`${displayValue}°`, x + 10, y);
-      ctx.fillText(`${displayValue}°`, x + 10, y);
-    }
+  const addLog = (msg: string) => {
+    setLogs(prev => [new Date().toLocaleTimeString() + ': ' + msg, ...prev.slice(0, 4)]);
+  };
 
-    // D. State Machine
-    const { start, end, type } = config.thresholds;
-    const isMin = type === 'angle_min' || type === 'distance_min';
+  // Fetch Devices
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then(devices => {
+      setCameras(devices.filter(d => d.kind === 'videoinput'));
+      setMics(devices.filter(d => d.kind === 'audioinput'));
+    });
+  }, []);
 
-    // Calculate percent complete (0 to 100)
-    let percent = 0;
-    if (isMin) {
-       percent = Math.min(100, Math.max(0, ((start - currentValue) / (start - end)) * 100));
-    } else {
-       percent = Math.min(100, Math.max(0, ((currentValue - start) / (end - start)) * 100));
-    }
-    setRepProgress(percent);
-    setDebugValue(Math.round(currentValue));
+  // Initialize camera & MediaPipe
+  useEffect(() => {
+    let pose: any;
+    let camera: any;
 
-    // Transitions
-    const buffer = 10; // Hysteresis buffer
-    const now = Date.now();
+    const onResults = (results: any) => {
+      if (!results.poseLandmarks) return;
 
-    if (exerciseState.current === 'START') {
-      const crossedThreshold = isMin ? (currentValue <= end) : (currentValue >= end);
-      if (crossedThreshold) {
-        exerciseState.current = 'MIDDLE';
-        setFeedback("Hold...");
-      } else if (percent > 50) {
-        setFeedback("Lower...");
-      } else {
-        setFeedback("Ready");
+      // Draw on canvas
+      if (canvasRef.current && videoRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) {
+          canvasRef.current.width = videoRef.current.videoWidth;
+          canvasRef.current.height = videoRef.current.videoHeight;
+
+          ctx.save();
+          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+          ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
+
+          // Filter out facial landmarks (indices 0-10) to reduce clutter and false positives
+          const bodyLandmarks = results.poseLandmarks.filter((_: any, index: number) => index > 10);
+
+          // Draw only body connections and landmarks
+          const drawingUtils = (window as any).drawConnectors ? window : (window as any);
+          if (drawingUtils.drawConnectors && drawingUtils.drawLandmarks) {
+            // Filter connections to only include body parts (indices > 10)
+            // Standard POSE_CONNECTIONS usually comes from the library
+            const connections = (window as any).POSE_CONNECTIONS || [];
+            const bodyConnections = connections.filter((conn: [number, number]) => conn[0] > 10 && conn[1] > 10);
+
+            // Draw full connections but they'll only show where both points exist
+            drawingUtils.drawConnectors(ctx, results.poseLandmarks, bodyConnections, { color: '#00FF00', lineWidth: 4 });
+            // Draw only body landmarks (no face)
+            drawingUtils.drawLandmarks(ctx, bodyLandmarks, { color: '#FF0000', lineWidth: 2 });
+          }
+          ctx.restore();
+        }
       }
-    } 
-    else if (exerciseState.current === 'MIDDLE') {
-      // Must return to start
-      const returnedToStart = isMin ? (currentValue >= start - buffer) : (currentValue <= start + buffer);
-      
-      if (returnedToStart) {
-        // REP COMPLETE
-        if (now - lastRepTime.current > 500) {
-          // Use REF to get current reps
-          const newReps = repsRef.current + 1;
-          
-          // Update Ref IMMEDIATELY for next frame logic
-          repsRef.current = newReps;
-          lastRepTime.current = now;
-          
-          // Update State for UI
-          setReps(newReps);
-          
-          exerciseState.current = 'START';
-          setFeedback("Rep Complete!");
-          
-          // AI Notification (Use REF for session)
-          if (activeSessionRef.current && isConnectedRef.current) {
-             activeSessionRef.current.sendRealtimeInput({
-                content: [{ text: `User did rep ${newReps} of ${exerciseIdRef.current}. Say the number ${newReps} enthusiastically.` }]
-             });
+
+      // EXERCISE LOGIC ENGINE
+      // Read from REFS to avoid stale closures
+      const currentExercise = exerciseRef.current;
+      const config = EXERCISE_CATALOG[currentExercise];
+
+      // ONLY COUNT REPS IF TRACKING IS ACTIVE (after countdown)
+      if (config && isTrackingActive) {
+        const progress = config.calculateProgress(results.poseLandmarks);
+        const state = exerciseStateRef.current;
+
+        // State Machine: START -> MIDDLE -> END (Rep Complete)
+        const sens = sensitivityRef.current;
+        if (state.stage === 'start') {
+          if (progress <= config.thresholds.middle + sens) {
+            state.stage = 'middle';
+            state.repStartTime = Date.now(); // Start timing the concentric phase (or full rep)
+
+            // Calculate Score at the bottom of the rep (max exertion)
+            if (config.calculateScore) {
+              state.currentRepScore = config.calculateScore(results.poseLandmarks);
+            } else {
+              state.currentRepScore = 100; // Default
+            }
+          }
+
+          // Check Form (Throttled)
+          if (config.checkForm && Date.now() - state.lastFeedback > 5000) {
+            const warning = config.checkForm(results.poseLandmarks);
+            if (warning) {
+              state.lastFeedback = Date.now();
+              setFeedback(warning);
+              sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'warning', detail: warning });
+
+              // Notify Gemini to speak
+              if (isConnectedRef.current && activeSessionPromise) {
+                activeSessionPromise.then(session => {
+                  session.send({ parts: [{ text: `Form Warning: ${warning}. Tell the user to fix it.` }] });
+                });
+              }
+            }
+          }
+        } else if (state.stage === 'middle') {
+          if (progress >= config.thresholds.end) {
+            state.stage = 'start';
+            // REP COMPLETE
+            const newReps = repsRef.current + 1;
+            setReps(newReps);
+            setLastRepScore(state.currentRepScore);
+
+            // Calculate Duration & Motivation
+            const duration = (Date.now() - state.repStartTime) / 1000;
+            state.repDurations.push(duration);
+            const avgDuration = state.repDurations.length > 1
+              ? state.repDurations.reduce((a, b) => a + b, 0) / state.repDurations.length
+              : duration;
+
+            sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'rep', detail: `Rep ${newReps} in ${duration.toFixed(1)}s (Score: ${state.currentRepScore})` });
+
+            // Trigger Sound Effect
+            playDing();
+
+            // Notify Gemini
+            if (isConnectedRef.current && activeSessionPromise) {
+              activeSessionPromise.then(session => {
+                // Check for struggle (1.5x slower than average)
+                if (state.repDurations.length > 3 && duration > avgDuration * 1.5) {
+                  session.send({ parts: [{ text: `User is struggling (Rep took ${duration.toFixed(1)}s vs avg ${avgDuration.toFixed(1)}s). Give high-energy motivation!` }] });
+                }
+
+                session.sendToolResponse({
+                  functionResponses: [{
+                    name: 'updateWorkoutStats',
+                    response: { result: `Rep ${newReps} completed. Form Score: ${state.currentRepScore}/100.` }
+                  }]
+                });
+              }).catch(() => {
+                // Ignore errors if no tool call was pending
+              });
+            }
           }
         }
       }
-    }
-  };
+    };
 
-  const onPoseResults = useCallback((results: any) => {
-    if (!canvasRef.current || !videoRef.current) return;
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
+    const startCamera = async () => {
+      try {
+        // Detect if mobile device
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
 
-    // 1. Draw Camera Feed
-    canvasRef.current.width = videoRef.current.videoWidth;
-    canvasRef.current.height = videoRef.current.videoHeight;
-    ctx.save();
-    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    
-    // 2. Draw Skeleton
-    if (results.poseLandmarks) {
-      window.drawConnectors(ctx, results.poseLandmarks, window.POSE_CONNECTIONS,
-                 {color: 'rgba(0, 255, 0, 0.5)', lineWidth: 2});
-      window.drawLandmarks(ctx, results.poseLandmarks,
-                 {color: 'rgba(255, 0, 0, 0.5)', lineWidth: 1, radius: 3});
-      
-      // 3. Process Logic
-      processExerciseLogic(results.poseLandmarks, ctx);
-    }
-    ctx.restore();
-  }, []); // Dependencies empty because we use Refs inside
+        // Lower resolution on mobile for better performance
+        const videoWidth = isMobile ? 480 : 640;
+        const videoHeight = isMobile ? 360 : 480;
 
-  // --- MediaPipe Initialization ---
-  useEffect(() => {
-    if (!window.Pose) {
-      addLog("MediaPipe not loaded yet");
+        const constraints: MediaStreamConstraints = {
+          video: {
+            width: videoWidth,
+            height: videoHeight,
+            deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
+            facingMode: isMobile ? 'user' : undefined // Prefer front camera on mobile
+          },
+          audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
+        };
+
+        const ms = await navigator.mediaDevices.getUserMedia(constraints);
+        setStream(ms);
+        if (videoRef.current) {
+          videoRef.current.srcObject = ms;
+        }
+        addLog(`Camera initialized (${videoWidth}x${videoHeight})`);
+
+        // Initialize MediaPipe Pose
+        if ((window as any).Pose) {
+          pose = new (window as any).Pose({
+            locateFile: (file: string) => {
+              return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+            }
+          });
+
+          // Lower model complexity on mobile for better performance
+          pose.setOptions({
+            modelComplexity: isMobile ? 0 : 1, // Lite model on mobile
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            minDetectionConfidence: isMobile ? 0.6 : 0.5,
+            minTrackingConfidence: isMobile ? 0.6 : 0.5
+          });
+          pose.onResults(onResults);
+
+          // Use MediaPipe Camera Utils
+          if ((window as any).Camera) {
+            camera = new (window as any).Camera(videoRef.current, {
+              onFrame: async () => {
+                if (videoRef.current) await pose.send({ image: videoRef.current });
+              },
+              width: videoWidth,
+              height: videoHeight
+            });
+            camera.start();
+          }
+        }
+      } catch (e) {
+        console.error("Camera error:", e);
+        setFeedback("Camera permission denied.");
+        addLog("Camera error");
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (camera) camera.stop();
+      if (pose) pose.close();
+    };
+  }, [selectedCamera, selectedMic]);
+
+  // Connect to Live API
+  const toggleLiveSession = async () => {
+    if (connectionState === LiveConnectionState.CONNECTED || connectionState === LiveConnectionState.CONNECTING) {
+      window.location.reload(); // Hard reset for clean disconnect
       return;
     }
 
-    const pose = new window.Pose({
-      locateFile: (file: string) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-      }
-    });
+    if (!stream) return;
 
-    pose.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-
-    pose.onResults(onPoseResults);
-    poseRef.current = pose;
-
-    if (videoRef.current) {
-      const camera = new window.Camera(videoRef.current, {
-        onFrame: async () => {
-          if (poseRef.current) {
-            await poseRef.current.send({image: videoRef.current});
-          }
-        },
-        width: 640,
-        height: 480
-      });
-      cameraRef.current = camera;
-      camera.start();
+    // CHECK FOR API KEY (Safe Mode Logic)
+    if (!KeyManager.hasKey()) {
+      setFeedback("⚠️ AI Coach requires a Key. Rep Counter is ON!");
+      addLog("AI Coach disabled (No Key). Vision only.");
+      // Do not connect, but allow the app to function visually
+      return;
     }
 
-    return () => {
-      if (cameraRef.current) cameraRef.current.stop();
-      if (poseRef.current) poseRef.current.close();
-    };
-  }, [onPoseResults]); // Re-init if callback changes (it won't because deps are [])
-
-  // --- Connection Logic ---
-  const toggleLiveSession = async () => {
-    if (connectionState === LiveConnectionState.CONNECTED || connectionState === LiveConnectionState.CONNECTING) {
-       window.location.reload(); 
-       return;
-    }
     setConnectionState(LiveConnectionState.CONNECTING);
-    addLog("Init Audio...");
+    setFeedback("Connecting to AI Coach...");
+    addLog("Initializing Audio Context...");
     await initializeAudio();
+
     try {
       const client = geminiService.getLiveClient();
-      const sessionPromise = client.connect({
+      let sessionPromise: Promise<any>;
+
+      addLog("Connecting to Gemini Live...");
+
+      sessionPromise = client.connect({
         model: MODEL_NAMES.LIVE,
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-          systemInstruction: "You are a spotter. When you receive text updates about reps, count them out loud. Example: 'One!', 'Two!'. Keep it brief.",
+          tools: [{ functionDeclarations: [workoutTool, changeExerciseTool, stopWorkoutTool, getWorkoutHistoryTool] }],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+          },
+          systemInstruction: SYSTEM_INSTRUCTIONS.LIVE_COACH,
         },
         callbacks: {
           onopen: () => {
+            console.log("Live Session Open");
+            addLog("Session Connected");
             setConnectionState(LiveConnectionState.CONNECTED);
+            setFeedback("AI Coach is watching. Start moving!");
             isConnectedRef.current = true;
-            startAudioStream(sessionPromise);
+            startStreaming(sessionPromise);
           },
           onmessage: async (msg: LiveServerMessage) => {
+            // 1. Handle Audio Response
             const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-            if (audioData) decodeAndPlay(audioData);
+            if (audioData) {
+              decodeAndPlay(audioData);
+            }
+
+            // 2. Handle Tool Calls
+            if (msg.toolCall) {
+              addLog("Tool Call Received");
+              for (const call of msg.toolCall.functionCalls) {
+                if (call.name === 'updateWorkoutStats') {
+                  const { reps: newReps, exerciseDetected, feedback: newFeedback } = call.args as any;
+
+                  addLog(`Update: ${newReps} reps, ${exerciseDetected}`);
+
+                  // Update UI
+                  if (typeof newReps === 'number') setReps(newReps);
+                  if (exerciseDetected) setExercise(exerciseDetected);
+                  if (newFeedback) setFeedback(newFeedback);
+
+                  // Send confirmation back to model
+                  sessionPromise.then(session => {
+                    session.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: 'UI Updated' }
+                      }]
+                    });
+                  });
+                } else if (call.name === 'changeExercise') {
+                  const { exerciseName } = call.args as any;
+                  setExercise(exerciseName);
+                  setReps(0); // Reset reps for new exercise
+                  addLog(`Switched to ${exerciseName}`);
+
+                  sessionPromise.then(session => {
+                    session.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: `Switched to ${exerciseName}` }
+                      }]
+                    });
+                  });
+                } else if (call.name === 'stopWorkout') {
+                  addLog("Stopping Workout");
+                  toggleLiveSession(); // This might cause a reload, which is fine
+
+                  sessionPromise.then(session => {
+                    session.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: 'Workout Stopped' }
+                      }]
+                    });
+                  });
+                } else if (call.name === 'getWorkoutHistory') {
+                  const history = sessionHistoryRef.current;
+                  const summary = history.length > 0
+                    ? history.map(h => `[${h.time}] ${h.type.toUpperCase()}: ${h.detail}`).join('\n')
+                    : "No events recorded yet.";
+
+                  addLog("Sent Session History");
+
+                  sessionPromise.then(session => {
+                    session.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: summary }
+                      }]
+                    });
+                  });
+                }
+              }
+            }
           },
           onclose: () => {
             setConnectionState(LiveConnectionState.DISCONNECTED);
             isConnectedRef.current = false;
+            setFeedback("Session ended.");
+            addLog("Session Closed");
+            clearInterval(frameIntervalRef.current);
           },
           onerror: (err) => {
             console.error(err);
             setConnectionState(LiveConnectionState.ERROR);
+            setFeedback("Connection error.");
+            addLog("Session Error");
             isConnectedRef.current = false;
           }
         }
       });
-      sessionPromise.then(s => setActiveSession(s));
+
+      setActiveSessionPromise(sessionPromise);
+
     } catch (e) {
+      console.error(e);
       setConnectionState(LiveConnectionState.ERROR);
+      setFeedback("Failed to connect.");
+      addLog("Connection Failed");
     }
   };
 
-  const startAudioStream = async (sessionPromise: Promise<any>) => {
+  const startStreaming = async (sessionPromise: Promise<any>) => {
     if (!audioContext) return;
-    if (audioContext.state === 'suspended') await audioContext.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    // IMPORTANT: Resume audio context if suspended (common in browsers)
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+
+    addLog("Starting Media Stream...");
+
+    // 1. Audio Stream Setup
     const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-    const source = inputCtx.createMediaStreamSource(stream);
+    const source = inputCtx.createMediaStreamSource(stream!);
     const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+
     processor.onaudioprocess = (e) => {
-      if (!isConnectedRef.current) return;
       const inputData = e.inputBuffer.getChannelData(0);
-      const pcmBlob = createPcmBlob(inputData);
-      sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
+      const pcmData = createPcmBlob(inputData);
+
+      // Send Audio to Gemini
+      sessionPromise.then(session => {
+        session.send({
+          realtimeInput: {
+            mediaChunks: [{
+              mimeType: pcmData.mimeType,
+              data: pcmData.data
+            }]
+          }
+        });
+      });
     };
+
     source.connect(processor);
     processor.connect(inputCtx.destination);
+
+    // 2. Video Frame Setup (1 FPS is enough for context, but higher for detailed form?)
+    // Actually, we are running local vision logic. We only need to send frames if we want Gemini to SEE.
+    // Let's send 1 FPS for efficiency.
+    frameIntervalRef.current = window.setInterval(async () => {
+      if (document.hidden) return; // Don't send if tab backgrounded
+
+      // We can send the canvas image which has the skeleton overlay? Or raw video?
+      // Raw video is better for AI analysis.
+      if (activeSessionPromise && videoRef.current) {
+        // Create a temp canvas to draw the frame
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = videoRef.current.videoWidth;
+        tempCanvas.height = videoRef.current.videoHeight;
+        const ctx = tempCanvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(videoRef.current, 0, 0);
+          const base64 = await blobToBase64(await new Promise(r => tempCanvas.toBlob(r, 'image/jpeg', 0.6)) as Blob);
+
+          sessionPromise.then(session => {
+            session.send({
+              realtimeInput: {
+                mediaChunks: [{
+                  mimeType: 'image/jpeg',
+                  data: base64
+                }]
+              }
+            });
+          });
+        }
+      }
+    }, 1000); // 1 FPS
   };
 
-  const handleSave = () => {
-    onSaveWorkout({
-      id: Date.now().toString(),
-      date: new Date().toISOString(),
-      exercise: exerciseId,
-      reps,
-      weight
-    });
-    setReps(0);
-    alert("Set saved!");
-  };
+  // Focus Mode Camera Layer (Simplified)
+  const cameraLayer = (
+    <div className={`relative ${focusMode ? 'fixed inset-0 z-50 bg-black' : 'flex-1 overflow-hidden rounded-3xl m-4 border border-gray-800 shadow-2xl safe-area-inset-top'}`}>
+      <video
+        ref={videoRef}
+        playsInline
+        muted
+        autoPlay
+        className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
+        onLoadedMetadata={() => {
+          // Force play if needed
+          videoRef.current?.play().catch(e => console.log("Autoplay blocked", e));
+        }}
+      />
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
+      />
+
+      {/* Debug Overlay (Hidden in Focus Mode unless requested, or standard) */}
+      {!focusMode && (
+        <>
+          <div className="absolute top-4 left-4 z-10">
+            <div className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 ${connectionState === LiveConnectionState.CONNECTED ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
+              <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-white animate-pulse' : 'bg-gray-500'}`} />
+              {connectionState}
+            </div>
+          </div>
+
+          {/* Logs */}
+          <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800 opacity-50 hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
+              <Terminal size={10} />
+              <span>System Log</span>
+            </div>
+            {logs.map((log, i) => (
+              <div key={i} className="truncate opacity-80">{log}</div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Countdown Overlay */}
+      {(isCountingDown || countdown === 0) && (
+        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+          <div className="text-center">
+            {countdown > 0 ? (
+              <>
+                <div className="text-9xl font-bold text-emerald-400 animate-pulse" style={{ textShadow: '0 0 40px rgba(16, 185, 129, 0.8)' }}>
+                  {countdown}
+                </div>
+                <div className="text-2xl text-white mt-4 font-bold drop-shadow-md">Get Ready...</div>
+              </>
+            ) : (
+              <div className="text-8xl font-bold text-green-500 animate-bounce" style={{ textShadow: '0 0 60px rgba(34, 197, 94, 1)' }}>
+                GO!
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Feedback Overlay */}
+      <div className={`absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300 ${!feedback ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
+        <p className="text-white text-center font-medium animate-pulse text-lg">{feedback || "Keep moving..."}</p>
+      </div>
+
+      {/* Focus Mode Specific Overlays */}
+      {focusMode && (
+        <div className="absolute inset-0 z-50 pointer-events-none">
+          {/* Top Bar Stats */}
+          <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start z-30 bg-gradient-to-b from-black/80 to-transparent">
+            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 pointer-events-auto">
+              <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {reps}
+              </div>
+              <div className="text-emerald-400 font-bold text-sm tracking-widest uppercase">Reps</div>
+            </div>
+
+            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-right pointer-events-auto">
+              <div className={`text-4xl font-bold mb-1 ${lastRepScore > 80 ? 'text-emerald-400' : lastRepScore > 50 ? 'text-yellow-400' : 'text-red-400'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {lastRepScore}
+              </div>
+              <div className="text-gray-400 font-bold text-sm tracking-widest uppercase">Form Score</div>
+            </div>
+          </div>
+
+          {/* Exit Button - Floating at bottom */}
+          <div className="absolute bottom-10 left-0 right-0 flex justify-center z-50 pointer-events-auto">
+            <button
+              onClick={() => toggleFocus(false)}
+              className="group bg-black/40 hover:bg-red-500/80 text-white/80 hover:text-white px-6 py-3 rounded-full backdrop-blur-md transition-all border border-white/10 hover:border-red-400 shadow-2xl flex items-center gap-3"
+            >
+              <EyeOff size={20} className="group-hover:scale-110 transition-transform" />
+              <span className="font-medium tracking-wide text-sm">EXIT FOCUS</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+
 
   return (
     <div className="flex flex-col h-full bg-gray-900 relative">
-      {/* Video Container */}
-      <div className="flex-1 relative overflow-hidden rounded-xl m-2 border border-gray-700 bg-black">
-        <video 
-          ref={videoRef} 
-          className="absolute inset-0 w-full h-full object-cover opacity-60"
-          playsInline 
-          muted 
-        />
-        <canvas 
-          ref={canvasRef} 
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        
-        {/* Progress Bar (Visual Feedback for Rep) */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-48 bg-gray-800/80 rounded-full overflow-hidden border border-gray-600 z-10">
-          <div 
-             className="absolute bottom-0 left-0 right-0 bg-emerald-500 transition-all duration-100 ease-out"
-             style={{ height: `${repProgress}%` }}
-          />
-        </div>
+      {/* Normal Render */}
+      {cameraLayer}
 
-        {/* Info Header */}
-        <div className="absolute top-4 left-4 right-4 flex justify-between items-start z-10 pointer-events-none">
-          <div className="bg-black/60 p-3 rounded-xl backdrop-blur-md">
-            <h3 className="text-white font-bold text-sm">{exerciseId}</h3>
-            <p className="text-emerald-400 text-xs font-mono mt-1">
-               Current: {debugValue} | Target: {EXERCISE_CATALOG[exerciseId]?.thresholds.end}
-            </p>
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="absolute inset-0 bg-black/95 z-50 flex items-center justify-center p-4 sm:p-6">
+          <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl w-full max-w-md border border-gray-700 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-2xl sm:text-xl font-bold text-white mb-6 sm:mb-4 flex items-center gap-2">
+              <Settings size={24} /> Settings
+            </h3>
+
+            <div className="space-y-6 sm:space-y-4">
+              <div>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Camera</label>
+                <select
+                  value={selectedCamera}
+                  onChange={(e) => { setSelectedCamera(e.target.value); }}
+                  className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
+                >
+                  {cameras.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0, 5)}`}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Microphone</label>
+                <select
+                  value={selectedMic}
+                  onChange={(e) => setSelectedMic(e.target.value)}
+                  className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
+                >
+                  {mics.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Mic ${d.deviceId.slice(0, 5)}`}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
+                  Sensitivity Correction ({sensitivity > 0 ? '+' : ''}{sensitivity}°)
+                </label>
+                <input
+                  type="range"
+                  min="-20"
+                  max="20"
+                  value={sensitivity}
+                  onChange={(e) => setSensitivity(Number(e.target.value))}
+                  className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                />
+                <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Adjust if reps are too hard/easy to register.</p>
+              </div>
+
+              {/* Adjustable Rest Timer */}
+              <div>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
+                  Rest Timer Duration ({restTime}s)
+                </label>
+                <input
+                  type="range"
+                  min="15"
+                  max="180"
+                  step="15"
+                  value={restTime}
+                  onChange={(e) => setRestTime(Number(e.target.value))}
+                  className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Time for rest between sets.</p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowSettings(false)}
+              className="w-full mt-8 sm:mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 sm:py-3 rounded-xl text-base sm:text-sm min-h-[52px]"
+            >
+              Done
+            </button>
           </div>
-
-          <div className="flex flex-col gap-2 items-end">
-             <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm flex items-center gap-2">
-               <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
-               <span className="text-white text-xs font-mono">{connectionState === 'CONNECTED' ? 'AI COACH ACTIVE' : 'AI OFFLINE'}</span>
-             </div>
-          </div>
         </div>
+      )}
 
-        {/* Dynamic Status Footer */}
-        <div className="absolute bottom-4 left-4 right-4 bg-black/80 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 flex items-center justify-between">
-           <div>
-             <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">Status</p>
-             <p className="text-white font-bold text-lg animate-pulse">{feedback}</p>
-           </div>
-           <div className="text-right">
-             <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">Total Reps</p>
-             <p className="font-black text-4xl text-emerald-400">{reps}</p>
-           </div>
-        </div>
-      </div>
+      {/* Main Container - Adjusted for Focus Mode */}
+      {/* If Focus Mode, we want this to be fixed inset-0 z-50. If not, relative. */}
+      {/* Actually, let's look at where the video is rendered. Line 635. */
+      /* I need to edit the container class at line 635. Let me make a separate Edit for that. */}
 
-      {/* Control Panel */}
-      <div className="bg-gray-800 p-6 rounded-t-3xl shadow-2xl z-20 shrink-0">
+      {/* Controls (Hidden in Focus Mode) */}
+      <div className={`bg-gray-900/95 backdrop-blur-md p-6 rounded-t-3xl shadow-2xl z-20 transition-transform duration-500 border-t border-gray-800 ${focusMode ? 'translate-y-full' : 'translate-y-0'}`}>
+        {/* Top Row: Exercise Selector, Focus Mode, Settings */}
         <div className="flex justify-between items-center mb-6">
-          <div className="flex flex-col flex-1 mr-4">
-            <label className="text-gray-400 text-xs uppercase mb-1 font-bold">Select Exercise</label>
+          <div className="flex-1 mr-4">
+            <label className="text-gray-400 text-xs uppercase mb-1 flex items-center gap-1 font-bold">
+              Current Exercise
+              {connectionState === LiveConnectionState.CONNECTED && <RefreshCw size={10} className="animate-spin text-emerald-500" />}
+            </label>
             <div className="relative">
-              <select 
-                value={exerciseId} 
-                onChange={(e) => { setExerciseId(e.target.value); setReps(0); }}
-                className="w-full bg-gray-700 text-white rounded-xl p-4 text-sm border-none focus:ring-2 focus:ring-emerald-500 font-medium appearance-none"
+              <select
+                value={exercise}
+                onChange={(e) => setExercise(e.target.value)}
+                className="w-full bg-black/40 text-white rounded-xl p-4 pr-10 text-lg font-medium appearance-none border border-gray-700 focus:border-emerald-500 focus:outline-none transition-all"
               >
-                {Object.values(EXERCISE_CATALOG).map(ex => (
-                  <option key={ex.id} value={ex.id}>{ex.name}</option>
+                <option>Auto-Detect</option>
+                {Object.keys(EXERCISE_CATALOG).filter(k => k !== 'default').map(ex => (
+                  <option key={ex} value={ex}>{ex}</option>
                 ))}
               </select>
-              <Settings className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
             </div>
+            {feedback && (
+              <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3 animate-pulse mt-2">
+                <Activity className="text-red-400 w-4 h-4" />
+                <p className="text-red-200 text-sm font-bold">{feedback}</p>
+              </div>
+            )}
           </div>
-          
-          <div className="flex flex-col w-24">
-             <label className="text-gray-400 text-xs uppercase mb-1 font-bold">Weight</label>
-             <input 
-               type="number" 
-               value={weight}
-               onChange={(e) => setWeight(Number(e.target.value))}
-               className="bg-gray-700 text-white rounded-xl p-4 text-sm border-none text-center font-bold"
-               placeholder="0"
-             />
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                toggleFocus(true);
+                // Trigger browser fullscreen
+                const elem = document.documentElement;
+                if (elem.requestFullscreen) {
+                  elem.requestFullscreen().catch(err => console.log("Fullscreen blocked", err));
+                }
+              }}
+              className="p-4 bg-indigo-600/20 text-indigo-400 rounded-xl hover:bg-indigo-600/30 border border-indigo-600/30 transition-colors"
+              title="Enter Focus Mode"
+            >
+              <Scan size={24} />
+            </button>
+
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-4 bg-gray-800 text-gray-400 rounded-xl hover:bg-gray-700 hover:text-white transition-colors"
+              aria-label="Settings"
+            >
+              <Settings size={24} />
+            </button>
           </div>
         </div>
 
-        <div className="flex gap-3 mb-4">
-           {/* Manual Controls */}
-           <button onClick={() => setReps(Math.max(0, reps - 1))} className="p-4 rounded-xl bg-gray-700 text-white font-bold hover:bg-gray-600">-</button>
-           <button onClick={() => setReps(reps + 1)} className="p-4 rounded-xl bg-gray-700 text-white font-bold hover:bg-gray-600">+</button>
-           
-           {/* Voice Button */}
-           <button 
-             onClick={toggleLiveSession}
-             className={`flex-1 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg ${
-               connectionState === LiveConnectionState.CONNECTED 
-               ? 'bg-red-500 hover:bg-red-600 text-white' 
-               : 'bg-indigo-600 hover:bg-indigo-500 text-white'
-             }`}
-           >
-             {connectionState === LiveConnectionState.CONNECTED ? <Square size={20} /> : <Play size={20} />}
-             {connectionState === LiveConnectionState.CONNECTED ? "Stop AI" : "Start AI Coach"}
-           </button>
+        {/* Middle Row: Primary Actions (Start / Rest) */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <button
+            onClick={startTracking}
+            disabled={isCountingDown || isTrackingActive}
+            className={`
+              relative overflow-hidden group
+              ${isTrackingActive ? 'bg-emerald-900/30 border border-emerald-500/50' : 'bg-emerald-600 hover:bg-emerald-500'}
+              disabled:opacity-50 disabled:cursor-not-allowed
+              text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
+            `}
+          >
+            {isTrackingActive ? (
+              <span className="flex items-center gap-2 text-emerald-400">
+                <Activity size={24} className="animate-pulse" /> Active
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 text-lg">
+                <Play size={24} className="fill-current" /> START
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={startRest}
+            disabled={isResting}
+            className={`
+              font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
+              ${isResting
+                ? 'bg-blue-900/30 text-blue-400 border border-blue-500/50'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'}
+            `}
+          >
+            {isResting ? (
+              <>
+                <Coffee size={24} className="animate-bounce" /> {restTime}s
+              </>
+            ) : (
+              <>
+                <Coffee size={24} /> Rest
+              </>
+            )}
+          </button>
         </div>
 
-        <button 
-          onClick={handleSave}
-          className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors"
-        >
-          <Save size={20} />
-          Save Set
-        </button>
+        {/* Bottom Row: Manual Reps, Coach, Save */}
+        <div className="flex items-center gap-4">
+          {/* Rep Counter */}
+          <div className="flex items-center bg-black/40 rounded-xl p-1 border border-gray-700">
+            <button onClick={() => setReps(Math.max(0, reps - 1))} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
+              <div className="text-xl font-bold">-</div>
+            </button>
+            <div className="flex-1 px-4 text-center">
+              <div className="text-2xl font-bold text-white">{reps}</div>
+            </div>
+            <button onClick={() => setReps(reps + 1)} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
+              <div className="text-xl font-bold">+</div>
+            </button>
+          </div>
+
+          {/* AI Coach Button */}
+          <button
+            onClick={toggleLiveSession}
+            className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all border ${connectionState === LiveConnectionState.CONNECTED
+              ? 'bg-red-500/10 text-red-500 border-red-500/50 hover:bg-red-500/20'
+              : connectionState === LiveConnectionState.CONNECTING
+                ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/50'
+                : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/20'
+              }`}
+          >
+            {connectionState === LiveConnectionState.CONNECTED ? <Square size={18} fill="currentColor" /> : <MessageSquare size={18} />}
+            <span className="text-sm">{connectionState === LiveConnectionState.CONNECTED ? "End Session" : "AI Coach"}</span>
+          </button>
+
+          {/* Save Button */}
+          <button
+            onClick={handleSave}
+            disabled={reps === 0}
+            className="w-14 h-14 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 rounded-xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Save Set"
+          >
+            <Save size={24} />
+          </button>
+        </div>
       </div>
     </div>
   );

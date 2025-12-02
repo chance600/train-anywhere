@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { geminiService } from '../services/geminiService';
 import { ChatMessage } from '../types';
-import { Send, Image as ImageIcon, Loader2, CheckCircle } from 'lucide-react';
+import { Send, Image as ImageIcon, Loader2, CheckCircle, Calendar } from 'lucide-react';
 
 const AskCoach: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -87,10 +87,10 @@ const AskCoach: React.FC = () => {
         ))}
         {isLoading && (
           <div className="flex justify-start">
-             <div className="bg-gray-800 rounded-2xl p-4 text-gray-400 flex items-center gap-2">
-               <Loader2 className="animate-spin" size={16} />
-               <span className="text-xs">Thinking...</span>
-             </div>
+            <div className="bg-gray-800 rounded-2xl p-4 text-gray-400 flex items-center gap-2">
+              <Loader2 className="animate-spin" size={16} />
+              <span className="text-xs">Thinking...</span>
+            </div>
           </div>
         )}
       </div>
@@ -103,16 +103,39 @@ const AskCoach: React.FC = () => {
             <button onClick={() => setSelectedImage(null)} className="text-red-400 ml-2 hover:underline">Remove</button>
           </div>
         )}
+
+        {/* Quick Actions */}
+        <div className="flex gap-2 mb-2 overflow-x-auto pb-2">
+          <button
+            onClick={() => {
+              const history = localStorage.getItem('workout_history');
+              const prompt = `Based on my workout history: ${history || 'No history yet'}, generate a detailed weekly workout plan for me. Focus on progressive overload.`;
+              setInput(prompt);
+              // Optional: auto-send
+              // handleSend(); 
+            }}
+            className="whitespace-nowrap px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded-full text-xs text-emerald-400 border border-emerald-500/30 flex items-center gap-1"
+          >
+            <Calendar size={12} /> Generate Weekly Plan
+          </button>
+          <button
+            onClick={() => setInput("Critique my form on Squats based on general best practices.")}
+            className="whitespace-nowrap px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded-full text-xs text-emerald-400 border border-emerald-500/30"
+          >
+            Form Tips
+          </button>
+        </div>
+
         <div className="flex gap-2">
           <button onClick={() => fileInputRef.current?.click()} className="p-3 bg-gray-700 rounded-xl hover:bg-gray-600 text-gray-300">
             <ImageIcon size={20} />
           </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            accept="image/*" 
-            onChange={handleFileSelect} 
+          <input
+            type="file"
+            ref={fileInputRef}
+            className="hidden"
+            accept="image/*"
+            onChange={handleFileSelect}
           />
           <input
             type="text"
@@ -122,7 +145,7 @@ const AskCoach: React.FC = () => {
             className="flex-1 bg-gray-700 rounded-xl px-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
           />
-          <button 
+          <button
             onClick={handleSend}
             disabled={isLoading}
             className="p-3 bg-emerald-500 rounded-xl hover:bg-emerald-400 text-black disabled:opacity-50 font-bold"
