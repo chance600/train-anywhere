@@ -3,48 +3,110 @@ import { geminiService } from '../services/geminiService';
 import { useAudio } from '../hooks/useAudio';
 import { LiveConnectionState, WorkoutSession } from '../types';
 import { MODEL_NAMES, SYSTEM_INSTRUCTIONS } from '../constants';
-import { Modality, LiveServerMessage, FunctionDeclaration, Type } from '@google/genai';
-import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal } from 'lucide-react';
+import { Modality, LiveServerMessage } from '@google/genai';
+import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Eye, Settings } from 'lucide-react';
 
-// Tool Definition for the AI to report progress
-const workoutTool: FunctionDeclaration = {
-  name: 'updateWorkoutStats',
-  description: 'Call this function to update the user\'s workout statistics on the screen when a rep is completed or exercise changes.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      reps: {
-        type: Type.NUMBER,
-        description: 'The total number of reps completed for the current set.',
-      },
-      exerciseDetected: {
-        type: Type.STRING,
-        description: 'The name of the exercise currently being performed (e.g. Squats, Pushups).',
-      },
-      feedback: {
-        type: Type.STRING,
-        description: 'Brief feedback string about form or encouragement to display on screen.',
-      },
+// --- MediaPipe Types ---
+declare global {
+  interface Window {
+    Pose: any;
+    Camera: any;
+    drawConnectors: any;
+    drawLandmarks: any;
+    POSE_CONNECTIONS: any;
+  }
+}
+
+// --- Math Helpers ---
+const calculateAngle = (a: any, b: any, c: any) => {
+  const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+  let angle = Math.abs(radians * 180.0 / Math.PI);
+  if (angle > 180.0) angle = 360 - angle;
+  return angle;
+};
+
+// Simple low-pass filter to smooth out jittery landmarks
+const smoothValue = (newVal: number, oldVal: number, alpha: number = 0.5) => {
+  return oldVal * (1 - alpha) + newVal * alpha;
+};
+
+// --- Exercise Logic Definitions ---
+type ExerciseState = 'START' | 'MIDDLE' | 'COMPLETE';
+
+interface ExerciseConfig {
+  id: string;
+  name: string;
+  instructions: string;
+  calculateProgress: (landmarks: any) => { value: number, target: number, visualPoint?: any };
+  thresholds: { start: number, end: number, type: 'angle_min' | 'angle_max' | 'distance_max' | 'distance_min' };
+}
+
+const EXERCISE_CATALOG: Record<string, ExerciseConfig> = {
+  'Squats': {
+    id: 'Squats',
+    name: 'Squats',
+    instructions: "Stand sideways. Bend knees until thighs are parallel.",
+    // Metric: Knee Angle
+    calculateProgress: (lm) => {
+      const leftKnee = calculateAngle(lm[23], lm[25], lm[27]);
+      const rightKnee = calculateAngle(lm[24], lm[26], lm[28]);
+      return { value: (leftKnee + rightKnee) / 2, target: 90, visualPoint: lm[25] }; // Average knee angle
     },
-    required: ['reps', 'exerciseDetected', 'feedback'],
+    thresholds: { start: 160, end: 100, type: 'angle_min' } // Start standing (180), go down (<100)
   },
+  'Pushups': {
+    id: 'Pushups',
+    name: 'Pushups',
+    instructions: "Plank position. Lower chest until elbows are 90°.",
+    // Metric: Elbow Angle
+    calculateProgress: (lm) => {
+      const leftElbow = calculateAngle(lm[11], lm[13], lm[15]);
+      const rightElbow = calculateAngle(lm[12], lm[14], lm[16]);
+      return { value: (leftElbow + rightElbow) / 2, target: 90, visualPoint: lm[13] };
+    },
+    thresholds: { start: 160, end: 90, type: 'angle_min' }
+  },
+  'Jumping Jacks': {
+    id: 'Jumping Jacks',
+    name: 'Jumping Jacks',
+    instructions: "Start feet together hands down. Jump feet apart hands up.",
+    // Metric: Wrist Y position relative to shoulder (Simple 'Hands Up' check)
+    calculateProgress: (lm) => {
+      // 11=L_Shoulder, 15=L_Wrist. If Wrist Y < Shoulder Y, hands are up (Y increases downwards)
+      const dist = (lm[11].y - lm[15].y) + (lm[12].y - lm[16].y); 
+      // dist > 0 means hands above shoulders. dist < 0 means hands below.
+      return { value: dist, target: 0.2, visualPoint: lm[11] }; 
+    },
+    thresholds: { start: -0.2, end: 0.1, type: 'distance_max' } // Start hands down, End hands up
+  },
+  'Lunges': {
+    id: 'Lunges',
+    name: 'Lunges',
+    instructions: "Step forward, lower hip until back knee is near ground.",
+    // Metric: Max bend of EITHER knee (since we alternate)
+    calculateProgress: (lm) => {
+      const leftKnee = calculateAngle(lm[23], lm[25], lm[27]);
+      const rightKnee = calculateAngle(lm[24], lm[26], lm[28]);
+      const activeLegAngle = Math.min(leftKnee, rightKnee);
+      return { value: activeLegAngle, target: 100, visualPoint: leftKnee < rightKnee ? lm[25] : lm[26] };
+    },
+    thresholds: { start: 160, end: 100, type: 'angle_min' }
+  },
+  'Crunches': {
+    id: 'Crunches',
+    name: 'Crunches',
+    instructions: "Lie on back. Curl shoulders towards knees.",
+    // Metric: Hip Angle
+    calculateProgress: (lm) => {
+      const leftHip = calculateAngle(lm[11], lm[23], lm[25]); 
+      return { value: leftHip, target: 60, visualPoint: lm[23] };
+    },
+    thresholds: { start: 130, end: 70, type: 'angle_min' } // Flat is ~180, curled is acute
+  }
 };
 
-// Helper for blob to base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64data = reader.result as string;
-      // Remove data URL prefix
-      resolve(base64data.split(',')[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-};
 
-// Helper for creating PCM blob
+// --- Helper for creating PCM blob ---
 function createPcmBlob(data: Float32Array): { data: string, mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
@@ -72,338 +134,394 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [connectionState, setConnectionState] = useState<LiveConnectionState>(LiveConnectionState.DISCONNECTED);
+  
+  // Workout State
   const [reps, setReps] = useState(0);
   const [weight, setWeight] = useState(0);
-  const [exercise, setExercise] = useState('Auto-Detect');
-  const [feedback, setFeedback] = useState("Ready to start.");
-  const [isSendingFrame, setIsSendingFrame] = useState(false);
-  const [activeSessionPromise, setActiveSessionPromise] = useState<Promise<any> | null>(null);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [exerciseId, setExerciseId] = useState<string>('Squats');
+  const [feedback, setFeedback] = useState("Align body");
+  const [repProgress, setRepProgress] = useState(0); // 0 to 100%
+  const [debugValue, setDebugValue] = useState(0);
 
-  const { initializeAudio, decodeAndPlay, stopAll, audioContext } = useAudio();
+  const [logs, setLogs] = useState<string[]>([]);
+  const [activeSession, setActiveSession] = useState<any>(null);
+
+  const { initializeAudio, decodeAndPlay, audioContext } = useAudio();
   
-  // Refs for loop management to avoid stale closures
-  const frameIntervalRef = useRef<number>();
+  // Refs for logic loop to avoid stale closures
   const isConnectedRef = useRef(false);
+  const poseRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
+  const lastRepTime = useRef<number>(0);
+  const exerciseState = useRef<ExerciseState>('START');
+  const valueSmoothing = useRef<number>(180); // Init high
+
+  // IMPORTANT: State Refs for the loop
+  const repsRef = useRef(0);
+  const exerciseIdRef = useRef('Squats');
+  const activeSessionRef = useRef<any>(null);
+
+  // Sync State to Refs
+  useEffect(() => {
+    repsRef.current = reps;
+  }, [reps]);
+
+  useEffect(() => {
+    exerciseIdRef.current = exerciseId;
+  }, [exerciseId]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
 
   const addLog = (msg: string) => {
-    setLogs(prev => [new Date().toLocaleTimeString() + ': ' + msg, ...prev.slice(0, 4)]);
+    setLogs(prev => [new Date().toLocaleTimeString().slice(0,8) + ': ' + msg, ...prev.slice(0, 4)]);
   };
 
-  // Initialize camera
-  useEffect(() => {
-    const startCamera = async () => {
-      try {
-        const ms = await navigator.mediaDevices.getUserMedia({ 
-          video: { width: 640, height: 480 }, 
-          audio: true 
-        });
-        setStream(ms);
-        if (videoRef.current) {
-          videoRef.current.srcObject = ms;
-        }
-        addLog("Camera initialized");
-      } catch (e) {
-        console.error("Camera error:", e);
-        setFeedback("Camera permission denied.");
-        addLog("Camera error");
-      }
-    };
-    startCamera();
-    return () => {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-    };
-  }, []);
+  // --- Pose Processing Loop ---
+  // Defined BEFORE the useEffect that uses it
+  const processExerciseLogic = (landmarks: any[], ctx: CanvasRenderingContext2D) => {
+    // Use REF to get current exercise ID inside loop
+    const config = EXERCISE_CATALOG[exerciseIdRef.current];
+    if (!config) return;
 
-  // Connect to Live API
-  const toggleLiveSession = async () => {
-    if (connectionState === LiveConnectionState.CONNECTED || connectionState === LiveConnectionState.CONNECTING) {
-       window.location.reload(); // Hard reset for clean disconnect
-       return;
+    // A. Calculate Metric
+    const rawData = config.calculateProgress(landmarks);
+    
+    // B. Smooth Metric
+    valueSmoothing.current = smoothValue(rawData.value, valueSmoothing.current, 0.3);
+    const currentValue = valueSmoothing.current;
+    
+    // C. Draw Metric on Screen (Visual Feedback)
+    if (rawData.visualPoint) {
+      const x = rawData.visualPoint.x * ctx.canvas.width;
+      const y = rawData.visualPoint.y * ctx.canvas.height;
+      
+      ctx.fillStyle = "#FF0000"; 
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, 2 * Math.PI);
+      ctx.fill();
+      
+      ctx.font = "bold 24px Inter";
+      ctx.fillStyle = "#00FF00";
+      ctx.strokeStyle = "black";
+      ctx.lineWidth = 3;
+      const displayValue = Math.round(currentValue);
+      ctx.strokeText(`${displayValue}°`, x + 10, y);
+      ctx.fillText(`${displayValue}°`, x + 10, y);
     }
 
-    if (!stream) return;
-    
-    setConnectionState(LiveConnectionState.CONNECTING);
-    setFeedback("Connecting to AI Coach...");
-    addLog("Initializing Audio Context...");
-    await initializeAudio();
+    // D. State Machine
+    const { start, end, type } = config.thresholds;
+    const isMin = type === 'angle_min' || type === 'distance_min';
 
+    // Calculate percent complete (0 to 100)
+    let percent = 0;
+    if (isMin) {
+       percent = Math.min(100, Math.max(0, ((start - currentValue) / (start - end)) * 100));
+    } else {
+       percent = Math.min(100, Math.max(0, ((currentValue - start) / (end - start)) * 100));
+    }
+    setRepProgress(percent);
+    setDebugValue(Math.round(currentValue));
+
+    // Transitions
+    const buffer = 10; // Hysteresis buffer
+    const now = Date.now();
+
+    if (exerciseState.current === 'START') {
+      const crossedThreshold = isMin ? (currentValue <= end) : (currentValue >= end);
+      if (crossedThreshold) {
+        exerciseState.current = 'MIDDLE';
+        setFeedback("Hold...");
+      } else if (percent > 50) {
+        setFeedback("Lower...");
+      } else {
+        setFeedback("Ready");
+      }
+    } 
+    else if (exerciseState.current === 'MIDDLE') {
+      // Must return to start
+      const returnedToStart = isMin ? (currentValue >= start - buffer) : (currentValue <= start + buffer);
+      
+      if (returnedToStart) {
+        // REP COMPLETE
+        if (now - lastRepTime.current > 500) {
+          // Use REF to get current reps
+          const newReps = repsRef.current + 1;
+          
+          // Update Ref IMMEDIATELY for next frame logic
+          repsRef.current = newReps;
+          lastRepTime.current = now;
+          
+          // Update State for UI
+          setReps(newReps);
+          
+          exerciseState.current = 'START';
+          setFeedback("Rep Complete!");
+          
+          // AI Notification (Use REF for session)
+          if (activeSessionRef.current && isConnectedRef.current) {
+             activeSessionRef.current.sendRealtimeInput({
+                content: [{ text: `User did rep ${newReps} of ${exerciseIdRef.current}. Say the number ${newReps} enthusiastically.` }]
+             });
+          }
+        }
+      }
+    }
+  };
+
+  const onPoseResults = useCallback((results: any) => {
+    if (!canvasRef.current || !videoRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    // 1. Draw Camera Feed
+    canvasRef.current.width = videoRef.current.videoWidth;
+    canvasRef.current.height = videoRef.current.videoHeight;
+    ctx.save();
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    
+    // 2. Draw Skeleton
+    if (results.poseLandmarks) {
+      window.drawConnectors(ctx, results.poseLandmarks, window.POSE_CONNECTIONS,
+                 {color: 'rgba(0, 255, 0, 0.5)', lineWidth: 2});
+      window.drawLandmarks(ctx, results.poseLandmarks,
+                 {color: 'rgba(255, 0, 0, 0.5)', lineWidth: 1, radius: 3});
+      
+      // 3. Process Logic
+      processExerciseLogic(results.poseLandmarks, ctx);
+    }
+    ctx.restore();
+  }, []); // Dependencies empty because we use Refs inside
+
+  // --- MediaPipe Initialization ---
+  useEffect(() => {
+    if (!window.Pose) {
+      addLog("MediaPipe not loaded yet");
+      return;
+    }
+
+    const pose = new window.Pose({
+      locateFile: (file: string) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+      }
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    pose.onResults(onPoseResults);
+    poseRef.current = pose;
+
+    if (videoRef.current) {
+      const camera = new window.Camera(videoRef.current, {
+        onFrame: async () => {
+          if (poseRef.current) {
+            await poseRef.current.send({image: videoRef.current});
+          }
+        },
+        width: 640,
+        height: 480
+      });
+      cameraRef.current = camera;
+      camera.start();
+    }
+
+    return () => {
+      if (cameraRef.current) cameraRef.current.stop();
+      if (poseRef.current) poseRef.current.close();
+    };
+  }, [onPoseResults]); // Re-init if callback changes (it won't because deps are [])
+
+  // --- Connection Logic ---
+  const toggleLiveSession = async () => {
+    if (connectionState === LiveConnectionState.CONNECTED || connectionState === LiveConnectionState.CONNECTING) {
+       window.location.reload(); 
+       return;
+    }
+    setConnectionState(LiveConnectionState.CONNECTING);
+    addLog("Init Audio...");
+    await initializeAudio();
     try {
       const client = geminiService.getLiveClient();
-      let sessionPromise: Promise<any>;
-
-      addLog("Connecting to Gemini Live...");
-
-      sessionPromise = client.connect({
+      const sessionPromise = client.connect({
         model: MODEL_NAMES.LIVE,
         config: {
           responseModalities: [Modality.AUDIO],
-          tools: [{ functionDeclarations: [workoutTool] }],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
-          },
-          systemInstruction: SYSTEM_INSTRUCTIONS.LIVE_COACH,
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
+          systemInstruction: "You are a spotter. When you receive text updates about reps, count them out loud. Example: 'One!', 'Two!'. Keep it brief.",
         },
         callbacks: {
           onopen: () => {
-            console.log("Live Session Open");
-            addLog("Session Connected");
             setConnectionState(LiveConnectionState.CONNECTED);
-            setFeedback("AI Coach is watching. Start moving!");
             isConnectedRef.current = true;
-            startStreaming(sessionPromise);
+            startAudioStream(sessionPromise);
           },
           onmessage: async (msg: LiveServerMessage) => {
-            // 1. Handle Audio Response
             const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-            if (audioData) {
-              decodeAndPlay(audioData);
-            }
-            
-            // 2. Handle Tool Calls
-            if (msg.toolCall) {
-              addLog("Tool Call Received");
-              for (const call of msg.toolCall.functionCalls) {
-                if (call.name === 'updateWorkoutStats') {
-                  const { reps: newReps, exerciseDetected, feedback: newFeedback } = call.args as any;
-                  
-                  addLog(`Update: ${newReps} reps, ${exerciseDetected}`);
-                  
-                  // Update UI
-                  if (typeof newReps === 'number') setReps(newReps);
-                  if (exerciseDetected) setExercise(exerciseDetected);
-                  if (newFeedback) setFeedback(newFeedback);
-
-                  // Send confirmation back to model
-                  sessionPromise.then(session => {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: call.id,
-                        name: call.name,
-                        response: { result: 'UI Updated' }
-                      }]
-                    });
-                  });
-                }
-              }
-            }
+            if (audioData) decodeAndPlay(audioData);
           },
           onclose: () => {
             setConnectionState(LiveConnectionState.DISCONNECTED);
             isConnectedRef.current = false;
-            setFeedback("Session ended.");
-            addLog("Session Closed");
-            clearInterval(frameIntervalRef.current);
           },
           onerror: (err) => {
             console.error(err);
             setConnectionState(LiveConnectionState.ERROR);
-            setFeedback("Connection error.");
-            addLog("Session Error");
             isConnectedRef.current = false;
           }
         }
       });
-      
-      setActiveSessionPromise(sessionPromise);
-
+      sessionPromise.then(s => setActiveSession(s));
     } catch (e) {
-      console.error(e);
       setConnectionState(LiveConnectionState.ERROR);
-      setFeedback("Failed to connect.");
-      addLog("Connection Failed");
     }
   };
 
-  const startStreaming = async (sessionPromise: Promise<any>) => {
+  const startAudioStream = async (sessionPromise: Promise<any>) => {
     if (!audioContext) return;
-
-    // IMPORTANT: Resume audio context if suspended (common in browsers)
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
-
-    addLog("Starting Media Stream...");
-
-    // 1. Audio Stream Setup
+    if (audioContext.state === 'suspended') await audioContext.resume();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-    const source = inputCtx.createMediaStreamSource(stream!);
+    const source = inputCtx.createMediaStreamSource(stream);
     const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-    
     processor.onaudioprocess = (e) => {
       if (!isConnectedRef.current) return;
       const inputData = e.inputBuffer.getChannelData(0);
       const pcmBlob = createPcmBlob(inputData);
-      
-      sessionPromise.then(session => {
-        session.sendRealtimeInput({ media: pcmBlob });
-      });
+      sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
     };
-    
     source.connect(processor);
     processor.connect(inputCtx.destination);
-
-    // 2. Video Stream Setup
-    // 4 FPS is a good balance for motion vs bandwidth
-    const FPS = 4; 
-    frameIntervalRef.current = window.setInterval(async () => {
-      if (!isConnectedRef.current || !videoRef.current || !canvasRef.current) return;
-
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      // Scale 0.5 is sufficient for Gemini 1.5/2.0 Vision
-      canvas.width = video.videoWidth * 0.5; 
-      canvas.height = video.videoHeight * 0.5;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
-      
-      setIsSendingFrame(true);
-      sessionPromise.then(session => {
-        session.sendRealtimeInput({
-          media: {
-            mimeType: 'image/jpeg',
-            data: base64
-          }
-        });
-        setTimeout(() => setIsSendingFrame(false), 100);
-      });
-
-    }, 1000 / FPS);
   };
 
   const handleSave = () => {
     onSaveWorkout({
       id: Date.now().toString(),
       date: new Date().toISOString(),
-      exercise,
+      exercise: exerciseId,
       reps,
       weight
     });
-    setReps(0); // Reset for next set
+    setReps(0);
     alert("Set saved!");
   };
 
   return (
     <div className="flex flex-col h-full bg-gray-900 relative">
-      {/* Camera Layer */}
+      {/* Video Container */}
       <div className="flex-1 relative overflow-hidden rounded-xl m-2 border border-gray-700 bg-black">
         <video 
           ref={videoRef} 
-          autoPlay 
+          className="absolute inset-0 w-full h-full object-cover opacity-60"
           playsInline 
           muted 
-          className="w-full h-full object-cover opacity-90"
         />
-        <canvas ref={canvasRef} className="hidden" />
+        <canvas 
+          ref={canvasRef} 
+          className="absolute inset-0 w-full h-full object-cover"
+        />
         
-        {/* Overlay Info */}
-        <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
-          <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
-            <p className="text-white font-mono text-sm">{connectionState === LiveConnectionState.CONNECTED ? "LIVE TRACKING" : "OFFLINE"}</p>
+        {/* Progress Bar (Visual Feedback for Rep) */}
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-48 bg-gray-800/80 rounded-full overflow-hidden border border-gray-600 z-10">
+          <div 
+             className="absolute bottom-0 left-0 right-0 bg-emerald-500 transition-all duration-100 ease-out"
+             style={{ height: `${repProgress}%` }}
+          />
+        </div>
+
+        {/* Info Header */}
+        <div className="absolute top-4 left-4 right-4 flex justify-between items-start z-10 pointer-events-none">
+          <div className="bg-black/60 p-3 rounded-xl backdrop-blur-md">
+            <h3 className="text-white font-bold text-sm">{exerciseId}</h3>
+            <p className="text-emerald-400 text-xs font-mono mt-1">
+               Current: {debugValue} | Target: {EXERCISE_CATALOG[exerciseId]?.thresholds.end}
+            </p>
           </div>
-          {/* Frame Transmission Indicator */}
-          {connectionState === LiveConnectionState.CONNECTED && (
-            <div className="flex items-center gap-2 mt-2">
-               <Activity size={12} className={isSendingFrame ? "text-green-400" : "text-gray-600"} />
-               <span className="text-[10px] text-gray-400">Stream Active</span>
-            </div>
-          )}
+
+          <div className="flex flex-col gap-2 items-end">
+             <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm flex items-center gap-2">
+               <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
+               <span className="text-white text-xs font-mono">{connectionState === 'CONNECTED' ? 'AI COACH ACTIVE' : 'AI OFFLINE'}</span>
+             </div>
+          </div>
         </div>
 
-        {/* Debug Log Overlay */}
-        <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800">
-           <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
-             <Terminal size={10} />
-             <span>System Log</span>
+        {/* Dynamic Status Footer */}
+        <div className="absolute bottom-4 left-4 right-4 bg-black/80 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 flex items-center justify-between">
+           <div>
+             <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">Status</p>
+             <p className="text-white font-bold text-lg animate-pulse">{feedback}</p>
            </div>
-           {logs.map((log, i) => (
-             <div key={i} className="truncate opacity-80">{log}</div>
-           ))}
-        </div>
-
-        {/* Feedback Overlay */}
-        <div className="absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300">
-          <p className="text-white text-center font-medium animate-pulse text-lg">{feedback}</p>
+           <div className="text-right">
+             <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">Total Reps</p>
+             <p className="font-black text-4xl text-emerald-400">{reps}</p>
+           </div>
         </div>
       </div>
 
-      {/* Controls */}
-      <div className="bg-gray-800 p-6 rounded-t-3xl shadow-2xl z-20">
+      {/* Control Panel */}
+      <div className="bg-gray-800 p-6 rounded-t-3xl shadow-2xl z-20 shrink-0">
         <div className="flex justify-between items-center mb-6">
           <div className="flex flex-col flex-1 mr-4">
-            <label className="text-gray-400 text-xs uppercase mb-1 flex items-center gap-1">
-              Exercise 
-              {connectionState === LiveConnectionState.CONNECTED && <RefreshCw size={10} className="animate-spin" />}
-            </label>
-            <select 
-              value={exercise} 
-              onChange={(e) => setExercise(e.target.value)}
-              className="bg-gray-700 text-white rounded-lg p-3 text-sm border-none focus:ring-2 focus:ring-emerald-500 font-medium"
-            >
-              <option>Auto-Detect</option>
-              <option>Squats</option>
-              <option>Pushups</option>
-              <option>Bicep Curls</option>
-              <option>Lunges</option>
-              <option>Plank</option>
-              <option>Burpees</option>
-              <option>Jumping Jacks</option>
-              <option>Bench Press</option>
-              <option>Deadlifts</option>
-            </select>
+            <label className="text-gray-400 text-xs uppercase mb-1 font-bold">Select Exercise</label>
+            <div className="relative">
+              <select 
+                value={exerciseId} 
+                onChange={(e) => { setExerciseId(e.target.value); setReps(0); }}
+                className="w-full bg-gray-700 text-white rounded-xl p-4 text-sm border-none focus:ring-2 focus:ring-emerald-500 font-medium appearance-none"
+              >
+                {Object.values(EXERCISE_CATALOG).map(ex => (
+                  <option key={ex.id} value={ex.id}>{ex.name}</option>
+                ))}
+              </select>
+              <Settings className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+            </div>
           </div>
           
           <div className="flex flex-col w-24">
-             <label className="text-gray-400 text-xs uppercase mb-1">Weight (kg)</label>
+             <label className="text-gray-400 text-xs uppercase mb-1 font-bold">Weight</label>
              <input 
                type="number" 
                value={weight}
                onChange={(e) => setWeight(Number(e.target.value))}
-               className="bg-gray-700 text-white rounded-lg p-3 text-sm border-none text-center font-bold"
+               className="bg-gray-700 text-white rounded-xl p-4 text-sm border-none text-center font-bold"
+               placeholder="0"
              />
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4">
-           {/* Rep Counter (Manual + AI) */}
-           <div className="flex items-center gap-3 bg-gray-700/50 p-2 rounded-xl">
-             <button onClick={() => setReps(Math.max(0, reps - 1))} className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-bold text-xl hover:bg-gray-500 transition-colors">-</button>
-             <div className="flex flex-col items-center w-20">
-               <span className="text-4xl font-bold text-white tracking-tighter">{reps}</span>
-               <span className="text-[10px] text-gray-400 uppercase tracking-widest">Reps</span>
-             </div>
-             <button onClick={() => setReps(reps + 1)} className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-xl hover:bg-emerald-500 transition-colors">+</button>
-           </div>
-
-           {/* Live Button */}
+        <div className="flex gap-3 mb-4">
+           {/* Manual Controls */}
+           <button onClick={() => setReps(Math.max(0, reps - 1))} className="p-4 rounded-xl bg-gray-700 text-white font-bold hover:bg-gray-600">-</button>
+           <button onClick={() => setReps(reps + 1)} className="p-4 rounded-xl bg-gray-700 text-white font-bold hover:bg-gray-600">+</button>
+           
+           {/* Voice Button */}
            <button 
              onClick={toggleLiveSession}
-             className={`flex-1 py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg ${
+             className={`flex-1 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg ${
                connectionState === LiveConnectionState.CONNECTED 
-               ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/20' 
-               : connectionState === LiveConnectionState.CONNECTING
-               ? 'bg-yellow-500 text-black'
-               : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20'
+               ? 'bg-red-500 hover:bg-red-600 text-white' 
+               : 'bg-indigo-600 hover:bg-indigo-500 text-white'
              }`}
            >
-             {connectionState === LiveConnectionState.CONNECTED ? <Square size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
-             {connectionState === LiveConnectionState.CONNECTED ? "End Coach" : "Start AI Coach"}
+             {connectionState === LiveConnectionState.CONNECTED ? <Square size={20} /> : <Play size={20} />}
+             {connectionState === LiveConnectionState.CONNECTED ? "Stop AI" : "Start AI Coach"}
            </button>
         </div>
 
         <button 
           onClick={handleSave}
-          className="w-full mt-4 bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors"
+          className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors"
         >
           <Save size={20} />
-          Log Workout Set
+          Save Set
         </button>
       </div>
     </div>
