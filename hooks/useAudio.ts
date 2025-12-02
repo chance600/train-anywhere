@@ -19,10 +19,10 @@ export const useAudio = () => {
     const outNode = ctx.createGain();
     outNode.connect(ctx.destination);
     outputNodeRef.current = outNode;
-    
+
     // Input path (for microphone if needed manually, though live.connect handles stream usually)
     // We mainly need context for decoding output.
-    
+
     setIsReady(true);
   };
 
@@ -38,17 +38,17 @@ export const useAudio = () => {
       for (let i = 0; i < len; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      
+
       // Convert raw PCM to AudioBuffer
       // Gemini sends raw PCM 16-bit 24kHz mono (usually)
       // We need to implement manual PCM to AudioBuffer conversion because decodeAudioData expects headers (WAV/MP3)
       // unless the API sends a WAV container. The Live API sends raw PCM.
-      
+
       const dataInt16 = new Int16Array(bytes.buffer);
       const buffer = ctx.createBuffer(1, dataInt16.length, 24000);
       const channelData = buffer.getChannelData(0);
       for (let i = 0; i < dataInt16.length; i++) {
-         channelData[i] = dataInt16[i] / 32768.0;
+        channelData[i] = dataInt16[i] / 32768.0;
       }
 
       // Schedule
@@ -81,10 +81,32 @@ export const useAudio = () => {
     nextStartTimeRef.current = 0;
   };
 
+  const playDing = () => {
+    if (!audioContextRef.current || !outputNodeRef.current) return;
+    const ctx = audioContextRef.current;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(outputNodeRef.current);
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5); // Drop pitch slightly
+
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.5);
+  };
+
   return {
     initializeAudio,
     decodeAndPlay,
     stopAll,
+    playDing,
     isReady,
     audioContext: audioContextRef.current
   };
