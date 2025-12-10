@@ -1,11 +1,15 @@
 import { GoogleGenAI, Modality, Type, LiveServerMessage } from "@google/genai";
-import { MODEL_NAMES, SYSTEM_INSTRUCTIONS, GEMINI_API_KEY } from '../constants';
+import { MODEL_NAMES, SYSTEM_INSTRUCTIONS } from '../constants';
+import { KeyManager } from './keyManager';
 
 class GeminiService {
-  private ai: GoogleGenAI;
 
-  constructor() {
-    this.ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  private getClient(): GoogleGenAI {
+    const apiKey = KeyManager.getKey();
+    if (!apiKey) {
+      throw new Error("API Key Missing. Please add it in Settings.");
+    }
+    return new GoogleGenAI({ apiKey });
   }
 
   // --- Chat with Thinking ---
@@ -31,7 +35,7 @@ class GeminiService {
 
       if (imageBase64) {
         // Single shot vision analysis with thinking
-        const response = await this.ai.models.generateContent({
+        const response = await this.getClient().models.generateContent({
           model: MODEL_NAMES.VISION,
           contents: { parts },
           config: {
@@ -46,7 +50,7 @@ class GeminiService {
         // or just pass the message if we assume the UI handles history display.
         // Let's just generate content with the history provided as "contents" is flexible,
         // but ChatSession is better.
-        const chat = this.ai.chats.create({
+        const chat = this.getClient().chats.create({
           model: MODEL_NAMES.CHAT_THINKING,
           config: {
             systemInstruction: SYSTEM_INSTRUCTIONS.COACH,
@@ -69,7 +73,7 @@ class GeminiService {
 
   // --- TTS ---
   async generateSpeech(text: string): Promise<ArrayBuffer> {
-    const response = await this.ai.models.generateContent({
+    const response = await this.getClient().models.generateContent({
       model: MODEL_NAMES.TTS,
       contents: { parts: [{ text }] },
       config: {
@@ -84,7 +88,7 @@ class GeminiService {
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) throw new Error("No audio generated");
-    
+
     // Decode base64 to ArrayBuffer
     const binaryString = atob(base64Audio);
     const len = binaryString.length;
@@ -97,7 +101,7 @@ class GeminiService {
 
   // --- Video Analysis ---
   async analyzeVideo(videoBase64: string, prompt: string) {
-    const response = await this.ai.models.generateContent({
+    const response = await this.getClient().models.generateContent({
       model: MODEL_NAMES.VIDEO_ANALYSIS,
       contents: {
         parts: [
@@ -121,7 +125,7 @@ class GeminiService {
   // --- Live API Helper ---
   // Returns the session object for the component to manage
   getLiveClient() {
-    return this.ai.live;
+    return this.getClient().live;
   }
 }
 

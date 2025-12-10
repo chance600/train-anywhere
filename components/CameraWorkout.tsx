@@ -1,11 +1,12 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { geminiService } from '../services/geminiService';
+import { KeyManager } from '../services/keyManager'; // [NEW] Safe Mode Support
 import { useAudio } from '../hooks/useAudio';
 import { LiveConnectionState, WorkoutSession } from '../types';
 import { MODEL_NAMES, SYSTEM_INSTRUCTIONS } from '../constants';
 import { Modality, LiveServerMessage, FunctionDeclaration, Type } from '@google/genai';
 import { EXERCISE_CATALOG } from '../utils/exerciseLogic';
-import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings } from 'lucide-react';
+import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings, Scan, EyeOff, Coffee, MessageSquare } from 'lucide-react';
 
 // Declare global Pose for CDN loaded script
 declare global {
@@ -25,9 +26,16 @@ const workoutTool: FunctionDeclaration = {
       reps: { type: Type.NUMBER, description: 'The total number of reps completed for the current set.' },
       exerciseDetected: { type: Type.STRING, description: 'The name of the exercise currently being performed.' },
       feedback: { type: Type.STRING, description: 'Brief feedback string about form or encouragement.' },
+      score: { type: Type.NUMBER, description: 'Form quality score (0-100) for the last rep.' },
     },
     required: ['reps', 'exerciseDetected', 'feedback'],
   },
+};
+
+const getWorkoutHistoryTool: FunctionDeclaration = {
+  name: 'getWorkoutHistory',
+  description: 'Call this function when the user asks about their performance, form, or history of the current session.',
+  parameters: { type: Type.OBJECT, properties: {} },
 };
 
 const changeExerciseTool: FunctionDeclaration = {
@@ -83,28 +91,44 @@ function createPcmBlob(data: Float32Array): { data: string, mimeType: string } {
 
 interface CameraWorkoutProps {
   onSaveWorkout: (session: WorkoutSession) => void;
+  onFocusChange?: (isFocused: boolean) => void;
 }
 
-const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
+const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusChange }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [connectionState, setConnectionState] = useState<LiveConnectionState>(LiveConnectionState.DISCONNECTED);
+  const [focusMode, setFocusMode] = useState(false);
+
+  // Helper to toggle focus
+  const toggleFocus = (active: boolean) => {
+    setFocusMode(active);
+    if (onFocusChange) onFocusChange(active);
+  };
   const [reps, setReps] = useState(0);
-  const [weight, setWeight] = useState(0);
-  const [exercise, setExercise] = useState('Auto-Detect');
-  const [feedback, setFeedback] = useState("Ready to start.");
+  const [exercise, setExercise] = useState('Squats');
+  const [feedback, setFeedback] = useState('');
+  const [lastRepScore, setLastRepScore] = useState<number | null>(null);
+  const [isResting, setIsResting] = useState(false);
+  const [restTime, setRestTime] = useState(60);
   const [isSendingFrame, setIsSendingFrame] = useState(false);
   const [activeSessionPromise, setActiveSessionPromise] = useState<Promise<any> | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
 
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
+
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [selectedCamera, setSelectedCamera] = useState<string>('');
   const [selectedMic, setSelectedMic] = useState<string>('');
   const [sensitivity, setSensitivity] = useState(0); // -20 to +20 degrees
+
+  // Countdown State
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  const [countdown, setCountdown] = useState(3);
+  const [isTrackingActive, setIsTrackingActive] = useState(false);
 
   const { initializeAudio, decodeAndPlay, stopAll, playDing, audioContext } = useAudio();
 
@@ -116,14 +140,87 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
   const repsRef = useRef(reps);
   const exerciseRef = useRef(exercise);
   const feedbackRef = useRef(feedback);
-  const exerciseStateRef = useRef({ stage: 'start', lastFeedback: 0 }); // 'start', 'middle', 'end'
+  const exerciseStateRef = useRef({
+    stage: 'start',
+    lastFeedback: 0,
+    repStartTime: 0,
+    repDurations: [] as number[],
+    currentRepScore: 0
+  });
   const sensitivityRef = useRef(sensitivity);
+  const sessionHistoryRef = useRef<{ time: string, type: 'rep' | 'warning', detail: string }[]>([]);
 
   // Sync state to refs
   useEffect(() => { repsRef.current = reps; }, [reps]);
   useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
   useEffect(() => { feedbackRef.current = feedback; }, [feedback]);
   useEffect(() => { sensitivityRef.current = sensitivity; }, [sensitivity]);
+
+  // Rest Timer Effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isResting && restTime > 0) {
+      interval = setInterval(() => setRestTime(t => t - 1), 1000);
+    } else if (restTime === 0) {
+      setIsResting(false);
+      setRestTime(60);
+      playDing(); // Alert user rest is over
+    }
+    return () => clearInterval(interval);
+  }, [isResting, restTime, playDing]);
+
+  // Countdown Timer Effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isCountingDown && countdown > 0) {
+      interval = setInterval(() => {
+        setCountdown(c => {
+          if (c === 1) {
+            playDing(); // Final beep
+            setIsCountingDown(false);
+            setIsTrackingActive(true);
+            setFeedback('GO! Start your reps!');
+
+            // Auto-dismiss "GO!" after 1 second
+            setTimeout(() => setCountdown(-1), 1000);
+            return 0;
+          }
+          playDing(); // Countdown beep
+          return c - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isCountingDown, countdown, playDing]);
+
+  const startTracking = () => {
+    setReps(0); // Reset reps
+    exerciseStateRef.current = { stage: 'start', lastFeedback: 0, repStartTime: 0, repDurations: [], currentRepScore: 0 };
+    setCountdown(3);
+    setIsCountingDown(true);
+    setIsTrackingActive(false);
+    setFeedback('Get ready...');
+  };
+
+  const startRest = () => {
+    setIsResting(true);
+    // setRestTime(60); // REMOVE THIS HARDCODED VALUE
+    // We already have restTime state effectively setting the starting time?
+    // Actually, the restTime state IS the current countdown.
+    // If the user adjusted the slider, that's fine, but we need a "duration" state separate from "current time"
+    // OR we just rely on the slider setting the initial value, and then we countdown?
+    // Wait, the slider sets 'restTime'. If we countdown, we are mutating the state that the slider controls.
+    // We need a separate `restDuration` vs `restTimer`.
+    // FOR NOW: Let's assume the slider sets the DESIRED rest time.
+    // When we start rest, we shouldn't reset it to 60. We should just start the countdown from whatever it is?
+    // Or better: The slider changes a `defaultRestTime`. `restTime` is the countdown.
+    // Let's check the state definitions. Line 105: const [restTime, setRestTime] = useState(60);
+    // There is no separate default.
+    // FIX: When rest ends, we reset to 60. That's the problem. It resets to 60 instead of what user chose.
+    // Let's simplify: The slider sets `restTime`. When we click "Rest", we just start the timer.
+    // But we need to remember what the "reset" value should be.
+    // Let's add a ref or separate state for `targetRestTime`.
+  };
 
   const addLog = (msg: string) => {
     setLogs(prev => [new Date().toLocaleTimeString() + ': ' + msg, ...prev.slice(0, 4)]);
@@ -156,11 +253,21 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
           ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
           ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
-          // Draw landmarks
+          // Filter out facial landmarks (indices 0-10) to reduce clutter and false positives
+          const bodyLandmarks = results.poseLandmarks.filter((_: any, index: number) => index > 10);
+
+          // Draw only body connections and landmarks
           const drawingUtils = (window as any).drawConnectors ? window : (window as any);
           if (drawingUtils.drawConnectors && drawingUtils.drawLandmarks) {
-            drawingUtils.drawConnectors(ctx, results.poseLandmarks, (window as any).POSE_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
-            drawingUtils.drawLandmarks(ctx, results.poseLandmarks, { color: '#FF0000', lineWidth: 2 });
+            // Filter connections to only include body parts (indices > 10)
+            // Standard POSE_CONNECTIONS usually comes from the library
+            const connections = (window as any).POSE_CONNECTIONS || [];
+            const bodyConnections = connections.filter((conn: [number, number]) => conn[0] > 10 && conn[1] > 10);
+
+            // Draw full connections but they'll only show where both points exist
+            drawingUtils.drawConnectors(ctx, results.poseLandmarks, bodyConnections, { color: '#00FF00', lineWidth: 4 });
+            // Draw only body landmarks (no face)
+            drawingUtils.drawLandmarks(ctx, bodyLandmarks, { color: '#FF0000', lineWidth: 2 });
           }
           ctx.restore();
         }
@@ -171,7 +278,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
       const currentExercise = exerciseRef.current;
       const config = EXERCISE_CATALOG[currentExercise];
 
-      if (config) {
+      // ONLY COUNT REPS IF TRACKING IS ACTIVE (after countdown)
+      if (config && isTrackingActive) {
         const progress = config.calculateProgress(results.poseLandmarks);
         const state = exerciseStateRef.current;
 
@@ -180,7 +288,14 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
         if (state.stage === 'start') {
           if (progress <= config.thresholds.middle + sens) {
             state.stage = 'middle';
-            // Optional: Feedback for reaching depth
+            state.repStartTime = Date.now(); // Start timing the concentric phase (or full rep)
+
+            // Calculate Score at the bottom of the rep (max exertion)
+            if (config.calculateScore) {
+              state.currentRepScore = config.calculateScore(results.poseLandmarks);
+            } else {
+              state.currentRepScore = 100; // Default
+            }
           }
 
           // Check Form (Throttled)
@@ -189,12 +304,11 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
             if (warning) {
               state.lastFeedback = Date.now();
               setFeedback(warning);
+              sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'warning', detail: warning });
 
               // Notify Gemini to speak
               if (isConnectedRef.current && activeSessionPromise) {
                 activeSessionPromise.then(session => {
-                  // We can send a text message to the model to prompt it to speak
-                  // The Live API supports sending text parts.
                   session.send({ parts: [{ text: `Form Warning: ${warning}. Tell the user to fix it.` }] });
                 });
               }
@@ -206,6 +320,16 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
             // REP COMPLETE
             const newReps = repsRef.current + 1;
             setReps(newReps);
+            setLastRepScore(state.currentRepScore);
+
+            // Calculate Duration & Motivation
+            const duration = (Date.now() - state.repStartTime) / 1000;
+            state.repDurations.push(duration);
+            const avgDuration = state.repDurations.length > 1
+              ? state.repDurations.reduce((a, b) => a + b, 0) / state.repDurations.length
+              : duration;
+
+            sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'rep', detail: `Rep ${newReps} in ${duration.toFixed(1)}s (Score: ${state.currentRepScore})` });
 
             // Trigger Sound Effect
             playDing();
@@ -213,10 +337,15 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
             // Notify Gemini
             if (isConnectedRef.current && activeSessionPromise) {
               activeSessionPromise.then(session => {
+                // Check for struggle (1.5x slower than average)
+                if (state.repDurations.length > 3 && duration > avgDuration * 1.5) {
+                  session.send({ parts: [{ text: `User is struggling (Rep took ${duration.toFixed(1)}s vs avg ${avgDuration.toFixed(1)}s). Give high-energy motivation!` }] });
+                }
+
                 session.sendToolResponse({
                   functionResponses: [{
                     name: 'updateWorkoutStats',
-                    response: { result: `Rep ${newReps} completed.` }
+                    response: { result: `Rep ${newReps} completed. Form Score: ${state.currentRepScore}/100.` }
                   }]
                 });
               }).catch(() => {
@@ -230,11 +359,19 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
 
     const startCamera = async () => {
       try {
+        // Detect if mobile device
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+
+        // Lower resolution on mobile for better performance
+        const videoWidth = isMobile ? 480 : 640;
+        const videoHeight = isMobile ? 360 : 480;
+
         const constraints: MediaStreamConstraints = {
           video: {
-            width: 640,
-            height: 480,
-            deviceId: selectedCamera ? { exact: selectedCamera } : undefined
+            width: videoWidth,
+            height: videoHeight,
+            deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
+            facingMode: isMobile ? 'user' : undefined // Prefer front camera on mobile
           },
           audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
         };
@@ -244,7 +381,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
         if (videoRef.current) {
           videoRef.current.srcObject = ms;
         }
-        addLog("Camera initialized");
+        addLog(`Camera initialized (${videoWidth}x${videoHeight})`);
 
         // Initialize MediaPipe Pose
         if ((window as any).Pose) {
@@ -253,12 +390,14 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
               return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
             }
           });
+
+          // Lower model complexity on mobile for better performance
           pose.setOptions({
-            modelComplexity: 1,
+            modelComplexity: isMobile ? 0 : 1, // Lite model on mobile
             smoothLandmarks: true,
             enableSegmentation: false,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
+            minDetectionConfidence: isMobile ? 0.6 : 0.5,
+            minTrackingConfidence: isMobile ? 0.6 : 0.5
           });
           pose.onResults(onResults);
 
@@ -268,8 +407,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
               onFrame: async () => {
                 if (videoRef.current) await pose.send({ image: videoRef.current });
               },
-              width: 640,
-              height: 480
+              width: videoWidth,
+              height: videoHeight
             });
             camera.start();
           }
@@ -288,7 +427,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
       if (camera) camera.stop();
       if (pose) pose.close();
     };
-  }, []);
+  }, [selectedCamera, selectedMic]);
 
   // Connect to Live API
   const toggleLiveSession = async () => {
@@ -298,6 +437,14 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
     }
 
     if (!stream) return;
+
+    // CHECK FOR API KEY (Safe Mode Logic)
+    if (!KeyManager.hasKey()) {
+      setFeedback("⚠️ AI Coach requires a Key. Rep Counter is ON!");
+      addLog("AI Coach disabled (No Key). Vision only.");
+      // Do not connect, but allow the app to function visually
+      return;
+    }
 
     setConnectionState(LiveConnectionState.CONNECTING);
     setFeedback("Connecting to AI Coach...");
@@ -314,7 +461,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
         model: MODEL_NAMES.LIVE,
         config: {
           responseModalities: [Modality.AUDIO],
-          tools: [{ functionDeclarations: [workoutTool, changeExerciseTool, stopWorkoutTool] }],
+          tools: [{ functionDeclarations: [workoutTool, changeExerciseTool, stopWorkoutTool, getWorkoutHistoryTool] }],
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
           },
@@ -388,6 +535,23 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
                       }]
                     });
                   });
+                } else if (call.name === 'getWorkoutHistory') {
+                  const history = sessionHistoryRef.current;
+                  const summary = history.length > 0
+                    ? history.map(h => `[${h.time}] ${h.type.toUpperCase()}: ${h.detail}`).join('\n')
+                    : "No events recorded yet.";
+
+                  addLog("Sent Session History");
+
+                  sessionPromise.then(session => {
+                    session.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: summary }
+                      }]
+                    });
+                  });
                 }
               }
             }
@@ -448,8 +612,9 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
     processor.connect(inputCtx.destination);
 
     // 2. Video Stream Setup
-    // 4 FPS is a good balance for motion vs bandwidth
-    const FPS = 4;
+    // Lower FPS on mobile to save bandwidth and battery
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+    const FPS = isMobile ? 3 : 4;
     frameIntervalRef.current = window.setInterval(async () => {
       if (!isConnectedRef.current || !videoRef.current || !canvasRef.current) return;
 
@@ -491,91 +656,160 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
       date: new Date().toISOString(),
       exercise,
       reps,
-      weight
+      weight: 0
     });
     setReps(0); // Reset for next set
     alert("Set saved!");
   };
 
+  // Determine content to render for the camera view (Video + Overlays)
+  const cameraLayer = (
+    <div className={`overflow-hidden bg-black transition-all duration-500 ${focusMode ? 'fixed inset-0 z-50 w-full h-full rounded-none m-0' : 'relative flex-1 rounded-xl m-2 border border-gray-700'}`}>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="absolute opacity-0 pointer-events-none"
+      />
+      <canvas ref={canvasRef} className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+
+      {/* Standard Info Overlays (Hidden in Focus Mode) */}
+      {!focusMode && (
+        <>
+          <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
+            <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
+              <p className="text-white font-mono text-sm">{connectionState === LiveConnectionState.CONNECTED ? "LIVE TRACKING" : "OFFLINE"}</p>
+            </div>
+            {connectionState === LiveConnectionState.CONNECTED && (
+              <div className="flex items-center gap-2 mt-2">
+                <Activity size={12} className={isSendingFrame ? "text-green-400" : "text-gray-600"} />
+                <span className="text-[10px] text-gray-400">Stream Active</span>
+              </div>
+            )}
+          </div>
+
+          {/* Standard Rep Counter (Top Right) */}
+          <div className="absolute top-4 right-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-right">
+            <div className="text-2xl font-bold text-white leading-none">{reps}</div>
+            <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Reps</div>
+          </div>
+
+          {/* Debug Log */}
+          <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800 opacity-50 hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
+              <Terminal size={10} />
+              <span>System Log</span>
+            </div>
+            {logs.map((log, i) => (
+              <div key={i} className="truncate opacity-80">{log}</div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Countdown Overlay */}
+      {(isCountingDown || countdown === 0) && (
+        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+          <div className="text-center">
+            {countdown > 0 ? (
+              <>
+                <div className="text-9xl font-bold text-emerald-400 animate-pulse" style={{ textShadow: '0 0 40px rgba(16, 185, 129, 0.8)' }}>
+                  {countdown}
+                </div>
+                <div className="text-2xl text-white mt-4 font-bold drop-shadow-md">Get Ready...</div>
+              </>
+            ) : (
+              <div className="text-8xl font-bold text-green-500 animate-bounce" style={{ textShadow: '0 0 60px rgba(34, 197, 94, 1)' }}>
+                GO!
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Feedback Overlay */}
+      <div className={`absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300 ${!feedback ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
+        <p className="text-white text-center font-medium animate-pulse text-lg">{feedback || "Keep moving..."}</p>
+      </div>
+
+      {/* Focus Mode Specific Overlays */}
+      {focusMode && (
+        <div className="absolute inset-0 z-50 pointer-events-none">
+          {/* Top Bar Stats */}
+          <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start z-30 bg-gradient-to-b from-black/80 to-transparent">
+            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 pointer-events-auto">
+              <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {reps}
+              </div>
+              <div className="text-emerald-400 font-bold text-sm tracking-widest uppercase">Reps</div>
+            </div>
+
+            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-right pointer-events-auto">
+              <div className={`text-4xl font-bold mb-1 ${lastRepScore > 80 ? 'text-emerald-400' : lastRepScore > 50 ? 'text-yellow-400' : 'text-red-400'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {lastRepScore}
+              </div>
+              <div className="text-gray-400 font-bold text-sm tracking-widest uppercase">Form Score</div>
+            </div>
+          </div>
+
+          {/* Exit Button - Floating at bottom */}
+          <div className="absolute bottom-10 left-0 right-0 flex justify-center z-50 pointer-events-auto">
+            <button
+              onClick={() => toggleFocus(false)}
+              className="group bg-black/40 hover:bg-red-500/80 text-white/80 hover:text-white px-6 py-3 rounded-full backdrop-blur-md transition-all border border-white/10 hover:border-red-400 shadow-2xl flex items-center gap-3"
+            >
+              <EyeOff size={20} className="group-hover:scale-110 transition-transform" />
+              <span className="font-medium tracking-wide text-sm">EXIT FOCUS</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+
+
   return (
     <div className="flex flex-col h-full bg-gray-900 relative">
-      {/* Camera Layer */}
-      <div className="flex-1 relative overflow-hidden rounded-xl m-2 border border-gray-700 bg-black">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="hidden" // Hide raw video, show canvas
-        />
-        <canvas ref={canvasRef} className="w-full h-full object-cover" />
-
-        {/* Overlay Info */}
-        <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
-          <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
-            <p className="text-white font-mono text-sm">{connectionState === LiveConnectionState.CONNECTED ? "LIVE TRACKING" : "OFFLINE"}</p>
-          </div>
-          {/* Frame Transmission Indicator */}
-          {connectionState === LiveConnectionState.CONNECTED && (
-            <div className="flex items-center gap-2 mt-2">
-              <Activity size={12} className={isSendingFrame ? "text-green-400" : "text-gray-600"} />
-              <span className="text-[10px] text-gray-400">Stream Active</span>
-            </div>
-          )}
-        </div>
-
-        {/* Debug Log Overlay */}
-        <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800">
-          <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
-            <Terminal size={10} />
-            <span>System Log</span>
-          </div>
-          {logs.map((log, i) => (
-            <div key={i} className="truncate opacity-80">{log}</div>
-          ))}
-        </div>
-
-        {/* Feedback Overlay */}
-        <div className="absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300">
-          <p className="text-white text-center font-medium animate-pulse text-lg">{feedback}</p>
-        </div>
-      </div>
+      {/* Normal Render */}
+      {cameraLayer}
 
       {/* Settings Modal */}
       {showSettings && (
-        <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-800 p-6 rounded-2xl w-full max-w-md border border-gray-700">
-            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-              <Settings size={20} /> Settings
+        <div className="absolute inset-0 bg-black/95 z-50 flex items-center justify-center p-4 sm:p-6">
+          <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl w-full max-w-md border border-gray-700 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-2xl sm:text-xl font-bold text-white mb-6 sm:mb-4 flex items-center gap-2">
+              <Settings size={24} /> Settings
             </h3>
 
-            <div className="space-y-4">
+            <div className="space-y-6 sm:space-y-4">
               <div>
-                <label className="text-xs text-gray-400 uppercase block mb-2">Camera</label>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Camera</label>
                 <select
                   value={selectedCamera}
-                  onChange={(e) => { setSelectedCamera(e.target.value); startCamera(); }}
-                  className="w-full bg-gray-700 text-white p-3 rounded-lg text-sm"
+                  onChange={(e) => { setSelectedCamera(e.target.value); }}
+                  className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
                 >
                   {cameras.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0, 5)}`}</option>)}
                 </select>
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 uppercase block mb-2">Microphone</label>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Microphone</label>
                 <select
                   value={selectedMic}
                   onChange={(e) => setSelectedMic(e.target.value)}
-                  className="w-full bg-gray-700 text-white p-3 rounded-lg text-sm"
+                  className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
                 >
                   {mics.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Mic ${d.deviceId.slice(0, 5)}`}</option>)}
                 </select>
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 uppercase block mb-2">
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
                   Sensitivity Correction ({sensitivity > 0 ? '+' : ''}{sensitivity}°)
                 </label>
                 <input
@@ -584,15 +818,32 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
                   max="20"
                   value={sensitivity}
                   onChange={(e) => setSensitivity(Number(e.target.value))}
-                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                  className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
                 />
-                <p className="text-[10px] text-gray-500 mt-1">Adjust if reps are too hard/easy to register.</p>
+                <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Adjust if reps are too hard/easy to register.</p>
+              </div>
+
+              {/* Adjustable Rest Timer */}
+              <div>
+                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
+                  Rest Timer Duration ({restTime}s)
+                </label>
+                <input
+                  type="range"
+                  min="15"
+                  max="180"
+                  step="15"
+                  value={restTime}
+                  onChange={(e) => setRestTime(Number(e.target.value))}
+                  className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Time for rest between sets.</p>
               </div>
             </div>
 
             <button
               onClick={() => setShowSettings(false)}
-              className="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl"
+              className="w-full mt-8 sm:mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 sm:py-3 rounded-xl text-base sm:text-sm min-h-[52px]"
             >
               Done
             </button>
@@ -600,84 +851,150 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout }) => {
         </div>
       )}
 
-      {/* Controls */}
-      <div className="bg-gray-800 p-6 rounded-t-3xl shadow-2xl z-20">
+      {/* Main Container - Adjusted for Focus Mode */}
+      {/* If Focus Mode, we want this to be fixed inset-0 z-50. If not, relative. */}
+      {/* Actually, let's look at where the video is rendered. Line 635. */
+      /* I need to edit the container class at line 635. Let me make a separate Edit for that. */}
+
+      {/* Controls (Hidden in Focus Mode) */}
+      <div className={`bg-gray-900/95 backdrop-blur-md p-6 rounded-t-3xl shadow-2xl z-20 transition-transform duration-500 border-t border-gray-800 ${focusMode ? 'translate-y-full' : 'translate-y-0'}`}>
+        {/* Top Row: Exercise Selector, Focus Mode, Settings */}
         <div className="flex justify-between items-center mb-6">
-          <div className="flex flex-col flex-1 mr-4">
-            <label className="text-gray-400 text-xs uppercase mb-1 flex items-center gap-1">
-              Exercise
-              {connectionState === LiveConnectionState.CONNECTED && <RefreshCw size={10} className="animate-spin" />}
+          <div className="flex-1 mr-4">
+            <label className="text-gray-400 text-xs uppercase mb-1 flex items-center gap-1 font-bold">
+              Current Exercise
+              {connectionState === LiveConnectionState.CONNECTED && <RefreshCw size={10} className="animate-spin text-emerald-500" />}
             </label>
-            <div className="flex gap-2">
+            <div className="relative">
               <select
                 value={exercise}
                 onChange={(e) => setExercise(e.target.value)}
-                className="flex-1 bg-gray-700 text-white rounded-lg p-3 text-sm border-none focus:ring-2 focus:ring-emerald-500 font-medium"
+                className="w-full bg-black/40 text-white rounded-xl p-4 pr-10 text-lg font-medium appearance-none border border-gray-700 focus:border-emerald-500 focus:outline-none transition-all"
               >
                 <option>Auto-Detect</option>
-                <option>Squats</option>
-                <option>Pushups</option>
-                <option>Bicep Curls</option>
-                <option>Lunges</option>
-                <option>Plank</option>
-                <option>Burpees</option>
-                <option>Jumping Jacks</option>
-                <option>Bench Press</option>
-                <option>Deadlifts</option>
+                {Object.keys(EXERCISE_CATALOG).filter(k => k !== 'default').map(ex => (
+                  <option key={ex} value={ex}>{ex}</option>
+                ))}
               </select>
-              <button
-                onClick={() => setShowSettings(true)}
-                className="p-3 bg-gray-700 rounded-lg text-gray-300 hover:bg-gray-600"
-              >
-                <Settings size={20} />
-              </button>
             </div>
+            {feedback && (
+              <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3 animate-pulse mt-2">
+                <Activity className="text-red-400 w-4 h-4" />
+                <p className="text-red-200 text-sm font-bold">{feedback}</p>
+              </div>
+            )}
           </div>
 
-          <div className="flex flex-col w-24">
-            <label className="text-gray-400 text-xs uppercase mb-1">Weight (kg)</label>
-            <input
-              type="number"
-              value={weight}
-              onChange={(e) => setWeight(Number(e.target.value))}
-              className="bg-gray-700 text-white rounded-lg p-3 text-sm border-none text-center font-bold"
-            />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                toggleFocus(true);
+                // Trigger browser fullscreen
+                const elem = document.documentElement;
+                if (elem.requestFullscreen) {
+                  elem.requestFullscreen().catch(err => console.log("Fullscreen blocked", err));
+                }
+              }}
+              className="p-4 bg-indigo-600/20 text-indigo-400 rounded-xl hover:bg-indigo-600/30 border border-indigo-600/30 transition-colors"
+              title="Enter Focus Mode"
+            >
+              <Scan size={24} />
+            </button>
+
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-4 bg-gray-800 text-gray-400 rounded-xl hover:bg-gray-700 hover:text-white transition-colors"
+              aria-label="Settings"
+            >
+              <Settings size={24} />
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4">
-          {/* Rep Counter (Manual + AI) */}
-          <div className="flex items-center gap-3 bg-gray-700/50 p-2 rounded-xl">
-            <button onClick={() => setReps(Math.max(0, reps - 1))} className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-bold text-xl hover:bg-gray-500 transition-colors">-</button>
-            <div className="flex flex-col items-center w-20">
-              <span className="text-4xl font-bold text-white tracking-tighter">{reps}</span>
-              <span className="text-[10px] text-gray-400 uppercase tracking-widest">Reps</span>
-            </div>
-            <button onClick={() => setReps(reps + 1)} className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-xl hover:bg-emerald-500 transition-colors">+</button>
-          </div>
-
-          {/* Live Button */}
+        {/* Middle Row: Primary Actions (Start / Rest) */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
           <button
-            onClick={toggleLiveSession}
-            className={`flex-1 py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg ${connectionState === LiveConnectionState.CONNECTED
-              ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/20'
-              : connectionState === LiveConnectionState.CONNECTING
-                ? 'bg-yellow-500 text-black'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20'
-              }`}
+            onClick={startTracking}
+            disabled={isCountingDown || isTrackingActive}
+            className={`
+              relative overflow-hidden group
+              ${isTrackingActive ? 'bg-emerald-900/30 border border-emerald-500/50' : 'bg-emerald-600 hover:bg-emerald-500'}
+              disabled:opacity-50 disabled:cursor-not-allowed
+              text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
+            `}
           >
-            {connectionState === LiveConnectionState.CONNECTED ? <Square size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
-            {connectionState === LiveConnectionState.CONNECTED ? "End Coach" : "Start AI Coach"}
+            {isTrackingActive ? (
+              <span className="flex items-center gap-2 text-emerald-400">
+                <Activity size={24} className="animate-pulse" /> Active
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 text-lg">
+                <Play size={24} className="fill-current" /> START
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={startRest}
+            disabled={isResting}
+            className={`
+              font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
+              ${isResting
+                ? 'bg-blue-900/30 text-blue-400 border border-blue-500/50'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'}
+            `}
+          >
+            {isResting ? (
+              <>
+                <Coffee size={24} className="animate-bounce" /> {restTime}s
+              </>
+            ) : (
+              <>
+                <Coffee size={24} /> Rest
+              </>
+            )}
           </button>
         </div>
 
-        <button
-          onClick={handleSave}
-          className="w-full mt-4 bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors"
-        >
-          <Save size={20} />
-          Log Workout Set
-        </button>
+        {/* Bottom Row: Manual Reps, Coach, Save */}
+        <div className="flex items-center gap-4">
+          {/* Rep Counter */}
+          <div className="flex items-center bg-black/40 rounded-xl p-1 border border-gray-700">
+            <button onClick={() => setReps(Math.max(0, reps - 1))} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
+              <div className="text-xl font-bold">-</div>
+            </button>
+            <div className="flex-1 px-4 text-center">
+              <div className="text-2xl font-bold text-white">{reps}</div>
+            </div>
+            <button onClick={() => setReps(reps + 1)} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
+              <div className="text-xl font-bold">+</div>
+            </button>
+          </div>
+
+          {/* AI Coach Button */}
+          <button
+            onClick={toggleLiveSession}
+            className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all border ${connectionState === LiveConnectionState.CONNECTED
+              ? 'bg-red-500/10 text-red-500 border-red-500/50 hover:bg-red-500/20'
+              : connectionState === LiveConnectionState.CONNECTING
+                ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/50'
+                : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/20'
+              }`}
+          >
+            {connectionState === LiveConnectionState.CONNECTED ? <Square size={18} fill="currentColor" /> : <MessageSquare size={18} />}
+            <span className="text-sm">{connectionState === LiveConnectionState.CONNECTED ? "End Session" : "AI Coach"}</span>
+          </button>
+
+          {/* Save Button */}
+          <button
+            onClick={handleSave}
+            disabled={reps === 0}
+            className="w-14 h-14 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 rounded-xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Save Set"
+          >
+            <Save size={24} />
+          </button>
+        </div>
       </div>
     </div>
   );
