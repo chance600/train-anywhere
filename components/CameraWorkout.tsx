@@ -238,6 +238,13 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     });
   }, []);
 
+  // Sync unstable dependencies to refs to avoid restarting the effect
+  const activeSessionPromiseRef = useRef(activeSessionPromise);
+  const playDingRef = useRef(playDing);
+
+  useEffect(() => { activeSessionPromiseRef.current = activeSessionPromise; }, [activeSessionPromise]);
+  useEffect(() => { playDingRef.current = playDing; }, [playDing]);
+
   // Initialize camera & MediaPipe
   useEffect(() => {
     let pose: any;
@@ -308,8 +315,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
               sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'warning', detail: warning });
 
               // Notify Gemini to speak
-              if (isConnectedRef.current && activeSessionPromise) {
-                activeSessionPromise.then(session => {
+              if (isConnectedRef.current && activeSessionPromiseRef.current) {
+                activeSessionPromiseRef.current.then(session => {
                   session.send({ parts: [{ text: `Form Warning: ${warning}. Tell the user to fix it.` }] });
                 });
               }
@@ -332,12 +339,12 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
 
             sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'rep', detail: `Rep ${newReps} in ${duration.toFixed(1)}s (Score: ${state.currentRepScore})` });
 
-            // Trigger Sound Effect
-            playDing();
+            // Trigger Sound Effect using REF
+            if (playDingRef.current) playDingRef.current();
 
             // Notify Gemini
-            if (isConnectedRef.current && activeSessionPromise) {
-              activeSessionPromise.then(session => {
+            if (isConnectedRef.current && activeSessionPromiseRef.current) {
+              activeSessionPromiseRef.current.then(session => {
                 // Check for struggle (1.5x slower than average)
                 if (state.repDurations.length > 3 && duration > avgDuration * 1.5) {
                   session.send({ parts: [{ text: `User is struggling (Rep took ${duration.toFixed(1)}s vs avg ${avgDuration.toFixed(1)}s). Give high-energy motivation!` }] });
@@ -431,7 +438,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       if (pose) pose.close();
       cancelAnimationFrame(animationFrameId);
     };
-  }, [selectedCamera, selectedMic, activeSessionPromise, playDing]); // Added activeSessionPromise and playDing to dependencies for onResults closure
+  }, [selectedCamera, selectedMic]); // Stable dependencies ONLY
 
   // Connect to Live API
   const toggleLiveSession = async () => {
