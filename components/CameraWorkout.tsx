@@ -115,7 +115,6 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const [isSendingFrame, setIsSendingFrame] = useState(false);
   const [activeSessionPromise, setActiveSessionPromise] = useState<Promise<any> | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [debugValue, setDebugValue] = useState(0);
 
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
@@ -247,11 +246,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     let isActive = true;
 
     const onResults = (results: any) => {
-      // Diagnostic: Log first success
-      if (debugValue === 0 && results.poseLandmarks) {
-        addLog("Vision System Active ✅");
-        setDebugValue(1);
-      }
+      if (!results.poseLandmarks) return;
 
       if (results.poseLandmarks) {
         // Draw on canvas
