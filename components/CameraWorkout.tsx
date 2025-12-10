@@ -115,6 +115,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const [isSendingFrame, setIsSendingFrame] = useState(false);
   const [activeSessionPromise, setActiveSessionPromise] = useState<Promise<any> | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [debugValue, setDebugValue] = useState(0);
 
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
@@ -148,6 +149,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     currentRepScore: 0
   });
   const sensitivityRef = useRef(sensitivity);
+  // [NEW] Tracking Ref for Loop
+  const isTrackingActiveRef = useRef(isTrackingActive);
   const sessionHistoryRef = useRef<{ time: string, type: 'rep' | 'warning', detail: string }[]>([]);
 
   // Sync state to refs
@@ -155,6 +158,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
   useEffect(() => { feedbackRef.current = feedback; }, [feedback]);
   useEffect(() => { sensitivityRef.current = sensitivity; }, [sensitivity]);
+  useEffect(() => { isTrackingActiveRef.current = isTrackingActive; }, [isTrackingActive]);
 
   // Rest Timer Effect
   useEffect(() => {
@@ -238,39 +242,40 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   // Initialize camera & MediaPipe
   useEffect(() => {
     let pose: any;
-    let camera: any;
+    let animationFrameId: number;
+    let currentStream: MediaStream | null = null;
+    let isActive = true;
 
     const onResults = (results: any) => {
-      if (!results.poseLandmarks) return;
+      // Diagnostic: Log first success
+      if (debugValue === 0 && results.poseLandmarks) {
+        addLog("Vision System Active ✅");
+        setDebugValue(1);
+      }
 
-      // Draw on canvas
-      if (canvasRef.current && videoRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        if (ctx) {
-          canvasRef.current.width = videoRef.current.videoWidth;
-          canvasRef.current.height = videoRef.current.videoHeight;
+      if (results.poseLandmarks) {
+        // Draw on canvas
+        if (canvasRef.current && videoRef.current) {
+          const ctx = canvasRef.current.getContext('2d');
+          if (ctx) {
+            canvasRef.current.width = videoRef.current.videoWidth;
+            canvasRef.current.height = videoRef.current.videoHeight;
+            ctx.save();
+            ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+            // Optional: Draw video frame on canvas (not needed if video is behind)
+            // ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
-          ctx.save();
-          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-          ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
+            const drawingUtils = (window as any).drawConnectors ? window : (window as any);
+            if (drawingUtils.drawConnectors && drawingUtils.drawLandmarks) {
+              const connections = (window as any).POSE_CONNECTIONS || [];
+              const bodyConnections = connections.filter((conn: [number, number]) => conn[0] > 10 && conn[1] > 10);
+              const bodyLandmarks = results.poseLandmarks.filter((_: any, index: number) => index > 10);
 
-          // Filter out facial landmarks (indices 0-10) to reduce clutter and false positives
-          const bodyLandmarks = results.poseLandmarks.filter((_: any, index: number) => index > 10);
-
-          // Draw only body connections and landmarks
-          const drawingUtils = (window as any).drawConnectors ? window : (window as any);
-          if (drawingUtils.drawConnectors && drawingUtils.drawLandmarks) {
-            // Filter connections to only include body parts (indices > 10)
-            // Standard POSE_CONNECTIONS usually comes from the library
-            const connections = (window as any).POSE_CONNECTIONS || [];
-            const bodyConnections = connections.filter((conn: [number, number]) => conn[0] > 10 && conn[1] > 10);
-
-            // Draw full connections but they'll only show where both points exist
-            drawingUtils.drawConnectors(ctx, results.poseLandmarks, bodyConnections, { color: '#00FF00', lineWidth: 4 });
-            // Draw only body landmarks (no face)
-            drawingUtils.drawLandmarks(ctx, bodyLandmarks, { color: '#FF0000', lineWidth: 2 });
+              drawingUtils.drawConnectors(ctx, results.poseLandmarks, bodyConnections, { color: '#00FF00', lineWidth: 4 });
+              drawingUtils.drawLandmarks(ctx, bodyLandmarks, { color: '#FF0000', lineWidth: 2 });
+            }
+            ctx.restore();
           }
-          ctx.restore();
         }
       }
 
@@ -280,7 +285,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       const config = EXERCISE_CATALOG[currentExercise];
 
       // ONLY COUNT REPS IF TRACKING IS ACTIVE (after countdown)
-      if (config && isTrackingActive) {
+      if (config && isTrackingActiveRef.current) {
         const progress = config.calculateProgress(results.poseLandmarks);
         const state = exerciseStateRef.current;
 
@@ -360,10 +365,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
 
     const startCamera = async () => {
       try {
-        // Detect if mobile device
         const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
-
-        // Lower resolution on mobile for better performance
         const videoWidth = isMobile ? 480 : 640;
         const videoHeight = isMobile ? 360 : 480;
 
@@ -372,55 +374,37 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             width: videoWidth,
             height: videoHeight,
             deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
-            facingMode: isMobile ? 'user' : undefined // Prefer front camera on mobile
+            facingMode: isMobile ? 'user' : undefined
           },
           audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
         };
 
         const ms = await navigator.mediaDevices.getUserMedia(constraints);
+        currentStream = ms;
         setStream(ms);
+
         if (videoRef.current) {
           videoRef.current.srcObject = ms;
+          // Wait for metadata to play
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch(e => console.error("Play error", e));
+            detectPose(); // Start loop once video is ready
+          };
         }
         addLog(`Camera initialized (${videoWidth}x${videoHeight})`);
 
-        // Initialize MediaPipe Pose
         if ((window as any).Pose) {
           pose = new (window as any).Pose({
-            locateFile: (file: string) => {
-              return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-            }
+            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
           });
-
-          // Lower model complexity on mobile for better performance
           pose.setOptions({
-            modelComplexity: isMobile ? 0 : 1, // Lite model on mobile
+            modelComplexity: isMobile ? 0 : 1,
             smoothLandmarks: true,
             enableSegmentation: false,
             minDetectionConfidence: isMobile ? 0.6 : 0.5,
             minTrackingConfidence: isMobile ? 0.6 : 0.5
           });
-          pose.onResults((results: any) => {
-            if (!results.poseLandmarks) return;
-            // Diagnostic: Log first success to confirm MediaPipe is working
-            if (debugValue === 0) {
-              addLog("Vision System Active ✅");
-              setDebugValue(1);
-            }
-            onResults(results);
-          });
-
-          // Use MediaPipe Camera Utils
-          if ((window as any).Camera) {
-            camera = new (window as any).Camera(videoRef.current, {
-              onFrame: async () => {
-                if (videoRef.current) await pose.send({ image: videoRef.current });
-              },
-              width: videoWidth,
-              height: videoHeight
-            });
-            camera.start();
-          }
+          pose.onResults(onResults);
         }
       } catch (e) {
         console.error("Camera error:", e);
@@ -429,14 +413,30 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       }
     };
 
+    // Explicit Loop
+    const detectPose = async () => {
+      if (!isActive || !videoRef.current || !pose) return;
+
+      try {
+        if (videoRef.current.readyState >= 2) { // 2 = HAVE_CURRENT_DATA
+          await pose.send({ image: videoRef.current });
+        }
+      } catch (err) {
+        // console.error(err); // Suppress frequent errors
+      }
+
+      animationFrameId = requestAnimationFrame(detectPose);
+    };
+
     startCamera();
 
     return () => {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      if (camera) camera.stop();
+      isActive = false;
+      if (currentStream) currentStream.getTracks().forEach(t => t.stop());
       if (pose) pose.close();
+      cancelAnimationFrame(animationFrameId);
     };
-  }, [selectedCamera, selectedMic]);
+  }, [selectedCamera, selectedMic, activeSessionPromise, playDing]); // Added activeSessionPromise and playDing to dependencies for onResults closure
 
   // Connect to Live API
   const toggleLiveSession = async () => {
