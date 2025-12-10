@@ -599,88 +599,105 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     const processor = inputCtx.createScriptProcessor(4096, 1, 1);
 
     processor.onaudioprocess = (e) => {
+      if (!isConnectedRef.current) return;
       const inputData = e.inputBuffer.getChannelData(0);
-      const pcmData = createPcmBlob(inputData);
+      const pcmBlob = createPcmBlob(inputData);
 
-      // Send Audio to Gemini
       sessionPromise.then(session => {
-        session.send({
-          realtimeInput: {
-            mediaChunks: [{
-              mimeType: pcmData.mimeType,
-              data: pcmData.data
-            }]
-          }
-        });
+        session.sendRealtimeInput({ media: pcmBlob });
       });
     };
 
     source.connect(processor);
     processor.connect(inputCtx.destination);
 
-    // 2. Video Frame Setup (1 FPS is enough for context, but higher for detailed form?)
-    // Actually, we are running local vision logic. We only need to send frames if we want Gemini to SEE.
-    // Let's send 1 FPS for efficiency.
+    // 2. Video Stream Setup
+    // Lower FPS on mobile to save bandwidth and battery
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+    const FPS = isMobile ? 3 : 4;
     frameIntervalRef.current = window.setInterval(async () => {
-      if (document.hidden) return; // Don't send if tab backgrounded
+      if (!isConnectedRef.current || !videoRef.current || !canvasRef.current) return;
 
-      // We can send the canvas image which has the skeleton overlay? Or raw video?
-      // Raw video is better for AI analysis.
-      if (activeSessionPromise && videoRef.current) {
-        // Create a temp canvas to draw the frame
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = videoRef.current.videoWidth;
-        tempCanvas.height = videoRef.current.videoHeight;
-        const ctx = tempCanvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(videoRef.current, 0, 0);
-          const base64 = await blobToBase64(await new Promise(r => tempCanvas.toBlob(r, 'image/jpeg', 0.6)) as Blob);
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      // We use the canvas that is already being drawn to by MediaPipe if possible, 
+      // but MediaPipe draws landmarks. We might want the raw feed for the AI?
+      // Actually, AI seeing landmarks is also fine, but usually it prefers raw video.
+      // Let's create a separate offscreen canvas or just draw the video frame again.
+      // Since we are using MediaPipe Camera utils, it updates the canvasRef with landmarks.
+      // Let's grab the frame from the video element directly.
 
-          sessionPromise.then(session => {
-            session.send({
-              realtimeInput: {
-                mediaChunks: [{
-                  mimeType: 'image/jpeg',
-                  data: base64
-                }]
-              }
-            });
-          });
-        }
-      }
-    }, 1000); // 1 FPS
+      const offscreen = document.createElement('canvas');
+      offscreen.width = video.videoWidth * 0.5;
+      offscreen.height = video.videoHeight * 0.5;
+      const ctx = offscreen.getContext('2d');
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+      const base64 = offscreen.toDataURL('image/jpeg', 0.6).split(',')[1];
+
+      setIsSendingFrame(true);
+      sessionPromise.then(session => {
+        session.sendRealtimeInput({
+          media: {
+            mimeType: 'image/jpeg',
+            data: base64
+          }
+        });
+        setTimeout(() => setIsSendingFrame(false), 100);
+      });
+
+    }, 1000 / FPS);
   };
 
-  // Focus Mode Camera Layer (Simplified)
+  const handleSave = () => {
+    onSaveWorkout({
+      id: Date.now().toString(),
+      date: new Date().toISOString(),
+      exercise,
+      reps,
+      weight: 0
+    });
+    setReps(0); // Reset for next set
+    alert("Set saved!");
+  };
+
+  // Determine content to render for the camera view (Video + Overlays)
   const cameraLayer = (
-    <div className={`relative ${focusMode ? 'fixed inset-0 z-50 bg-black' : 'flex-1 overflow-hidden rounded-3xl m-4 border border-gray-800 shadow-2xl safe-area-inset-top'}`}>
+    <div className={`overflow-hidden bg-black transition-all duration-500 ${focusMode ? 'fixed inset-0 z-50 w-full h-full rounded-none m-0' : 'relative flex-1 rounded-xl m-2 border border-gray-700'}`}>
       <video
         ref={videoRef}
+        autoPlay
         playsInline
         muted
-        autoPlay
-        className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
-        onLoadedMetadata={() => {
-          // Force play if needed
-          videoRef.current?.play().catch(e => console.log("Autoplay blocked", e));
-        }}
+        className="absolute opacity-0 pointer-events-none"
       />
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
-      />
+      <canvas ref={canvasRef} className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
 
-      {/* Debug Overlay (Hidden in Focus Mode unless requested, or standard) */}
+      {/* Standard Info Overlays (Hidden in Focus Mode) */}
       {!focusMode && (
         <>
-          <div className="absolute top-4 left-4 z-10">
-            <div className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 ${connectionState === LiveConnectionState.CONNECTED ? 'bg-green-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
-              <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-white animate-pulse' : 'bg-gray-500'}`} />
-              {connectionState}
+          <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
+            <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
+              <p className="text-white font-mono text-sm">{connectionState === LiveConnectionState.CONNECTED ? "LIVE TRACKING" : "OFFLINE"}</p>
             </div>
+            {connectionState === LiveConnectionState.CONNECTED && (
+              <div className="flex items-center gap-2 mt-2">
+                <Activity size={12} className={isSendingFrame ? "text-green-400" : "text-gray-600"} />
+                <span className="text-[10px] text-gray-400">Stream Active</span>
+              </div>
+            )}
           </div>
 
-          {/* Logs */}
+          {/* Standard Rep Counter (Top Right) */}
+          <div className="absolute top-4 right-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-right">
+            <div className="text-2xl font-bold text-white leading-none">{reps}</div>
+            <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Reps</div>
+          </div>
+
+          {/* Debug Log */}
           <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800 opacity-50 hover:opacity-100 transition-opacity">
             <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
               <Terminal size={10} />
