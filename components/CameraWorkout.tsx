@@ -180,6 +180,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             setIsCountingDown(false);
             setIsTrackingActive(true);
             setFeedback('GO! Start your reps!');
+            addLog("Tracking Started");
 
             // Auto-dismiss "GO!" after 1 second
             setTimeout(() => setCountdown(-1), 1000);
@@ -399,7 +400,15 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             minDetectionConfidence: isMobile ? 0.6 : 0.5,
             minTrackingConfidence: isMobile ? 0.6 : 0.5
           });
-          pose.onResults(onResults);
+          pose.onResults((results: any) => {
+            if (!results.poseLandmarks) return;
+            // Diagnostic: Log first success to confirm MediaPipe is working
+            if (debugValue === 0) {
+              addLog("Vision System Active ✅");
+              setDebugValue(1);
+            }
+            onResults(results);
+          });
 
           // Use MediaPipe Camera Utils
           if ((window as any).Camera) {
