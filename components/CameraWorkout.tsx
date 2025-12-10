@@ -679,9 +679,12 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         autoPlay
         playsInline
         muted
-        className="absolute opacity-0 pointer-events-none"
+        className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
       />
-      <canvas ref={canvasRef} className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"
+      />
 
       {/* Standard Info Overlays (Hidden in Focus Mode) */}
       {!focusMode && (
