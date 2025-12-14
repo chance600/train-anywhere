@@ -1,12 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Check, AlertCircle, Loader2, Plus, Trash2, Table } from 'lucide-react';
+import { Upload, FileText, Check, AlertCircle, Loader2, Plus, Trash2, Table, ScanEye } from 'lucide-react';
 import { useTheme } from './ThemeProvider';
-import { parseWorkoutImage, ParsedWorkout } from '../services/geminiParser';
+import { parseWorkoutFiles, ParsedWorkout } from '../services/geminiParser';
+// ... imports ...
+
+// ... inside component ...
+
+
+
 import { supabase } from '../services/supabaseClient';
 import { KeyManager } from '../services/keyManager';
 
 interface WorkoutImporterProps {
     onImportComplete: () => void;
+    isPro?: boolean;
 }
 
 type ImportMode = 'ai' | 'manual' | 'csv';
@@ -19,14 +26,15 @@ interface ManualEntry {
     weight: number;
 }
 
-const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) => {
+const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete, isPro = false }) => {
     const { theme } = useTheme();
     const [mode, setMode] = useState<ImportMode>('manual'); // Default to manual
     const [dragActive, setDragActive] = useState(false);
-    const [file, setFile] = useState<File | null>(null);
+    const [files, setFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [parsedData, setParsedData] = useState<ParsedWorkout | null>(null);
+    const [file, setFile] = useState<File | null>(null); // State for CSV file
 
     // API Key State
     const [hasApiKey, setHasApiKey] = useState(false);
@@ -55,55 +63,84 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) =
         e.stopPropagation();
         setDragActive(false);
 
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            handleFile(e.dataTransfer.files[0]);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleFiles(Array.from(e.dataTransfer.files));
         }
     };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         e.preventDefault();
-        if (e.target.files && e.target.files[0]) {
-            handleFile(e.target.files[0]);
+        if (e.target.files && e.target.files.length > 0) {
+            handleFiles(Array.from(e.target.files));
         }
     };
 
-    const handleFile = async (file: File) => {
+    const handleFiles = (newFiles: File[]) => {
         setError(null);
-        setFile(file);
+        if (mode === 'csv') {
+            // CSV Logic remains single file for now
+            if (newFiles.length > 0) {
+                setFile(newFiles[0]);
+                processCSV(newFiles[0]);
+            }
+        } else {
+            // AI Mode - Append to assess
+            const validFiles = newFiles.filter(f => f.type.startsWith('image/') || f.type === 'application/pdf');
+            if (validFiles.length !== newFiles.length) {
+                setError('Some files were ignored (only Images/PDF supported).');
+            }
+            setFiles(prev => [...prev, ...validFiles]);
+        }
+    };
+
+    const removeFile = (index: number) => {
+        setFiles(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const processCSV = async (file: File) => {
+        // ... existing CSV logic ...
         setLoading(true);
+        try {
+            const text = await file.text();
+            // ... (keep csv parsing logic or move to helper if it gets too long)
+            const lines = text.split('\n');
+            const entries: ManualEntry[] = [];
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                const [date, exercise, sets, reps, weight] = line.split(',').map(s => s.trim());
+                if (exercise) {
+                    entries.push({
+                        date: date || new Date().toISOString().split('T')[0],
+                        exercise,
+                        sets: parseInt(sets) || 1,
+                        reps: parseInt(reps) || 0,
+                        weight: parseFloat(weight) || 0
+                    });
+                }
+            }
+            setManualEntries(entries);
+            if (entries.length === 0) throw new Error("No valid workouts found in CSV.");
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'CSV Error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const analyzeFiles = async () => {
+        if (files.length === 0) return;
+        setLoading(true);
+        setError(null);
 
         try {
-            if (mode === 'csv') {
-                const text = await file.text();
-                const lines = text.split('\n');
-                const entries: ManualEntry[] = [];
-                // Simple CSV parser: Date, Exercise, Sets, Reps, Weight
-                for (let i = 1; i < lines.length; i++) { // Skip header
-                    const line = lines[i].trim();
-                    if (!line) continue;
-                    const [date, exercise, sets, reps, weight] = line.split(',').map(s => s.trim());
-                    if (exercise) {
-                        entries.push({
-                            date: date || new Date().toISOString().split('T')[0],
-                            exercise,
-                            sets: parseInt(sets) || 1,
-                            reps: parseInt(reps) || 0,
-                            weight: parseFloat(weight) || 0
-                        });
-                    }
-                }
-                setManualEntries(entries);
-                if (entries.length === 0) throw new Error("No valid workouts found in CSV.");
-            } else {
-                // AI Mode
-                if (!file.type.startsWith('image/') && file.type !== 'text/plain' && file.type !== 'application/pdf') {
-                    throw new Error('Please upload an image, PDF, or text file.');
-                }
-                const result = await parseWorkoutImage(file);
-                setParsedData(result);
-            }
+            // Dynamic import to avoid circular dependency if any, or just direct
+            const { parseWorkoutFiles } = await import('../services/geminiParser');
+            const result = await parseWorkoutFiles(files);
+            setParsedData(result);
+            setFiles([]); // Clear staging after success
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Unknown error occurred');
+            setError(err instanceof Error ? err.message : 'Analysis failed');
         } finally {
             setLoading(false);
         }
@@ -128,6 +165,7 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) =
                 exercise: ex.exercise,
                 reps: ex.reps * ex.sets,
                 score: 0,
+                duration_seconds: 0,
                 created_at: ex.date.includes('T') ? ex.date : new Date(ex.date).toISOString()
             }));
 
@@ -148,6 +186,16 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) =
                 }));
 
                 localStorage.setItem('workout_history', JSON.stringify([...currentHistory, ...guestWorkouts]));
+
+                // Fire-and-forget Analytics Log (Bulk)
+                const analyticsData = newWorkouts.map(w => ({
+                    exercise: w.exercise,
+                    reps: w.reps
+                }));
+
+                supabase.from('anonymous_workouts').insert(analyticsData).then(({ error }) => {
+                    if (error) console.error('Analytics Log Error:', error);
+                });
             }
 
             onImportComplete();
@@ -358,10 +406,10 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) =
                         <div className="flex items-center gap-2 font-bold">
                             <div className="px-2 py-0.5 bg-purple-100 dark:bg-purple-800 rounded text-xs">PRO</div>
                             AI Scan
-                            {!hasApiKey && <span className="text-red-500 text-xs ml-2">(Setup Required)</span>}
+                            {!hasApiKey && !isPro && <span className="text-red-500 text-xs ml-2">(Setup Required)</span>}
                         </div>
                         <p className="mt-1">Upload a photo of your handwritten log or a screenshot.</p>
-                        {!hasApiKey && (
+                        {!hasApiKey && !isPro && (
                             <div className="mt-2 p-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded text-xs font-medium">
                                 ⚠️ Gemini API Key is missing. AI features are currently disabled. Please add a key in Profile Settings.
                             </div>
@@ -372,6 +420,105 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) =
                         <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-600 dark:text-red-400">
                             <AlertCircle size={20} />
                             <span>{error}</span>
+                        </div>
+                    )}
+
+                    {!parsedData && (
+                        <div className="mt-6 space-y-6">
+                            {/* Instructions */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm text-gray-500 dark:text-gray-400">
+                                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700">
+                                    <span className="block font-bold text-gray-900 dark:text-white mb-1">1. Take a Photo</span>
+                                    Snap a picture of your handwritten gym log or whiteboard.
+                                </div>
+                                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700">
+                                    <span className="block font-bold text-gray-900 dark:text-white mb-1">2. Or Screenshot</span>
+                                    Upload a screenshot from your notes app or another tracker.
+                                </div>
+                                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700">
+                                    <span className="block font-bold text-gray-900 dark:text-white mb-1">3. AI Extraction</span>
+                                    Gemini Vision extracts exercises, sets, reps, and weights.
+                                </div>
+                            </div>
+
+                            {/* Drop Zone */}
+                            <div
+                                className={`relative border-2 border-dashed rounded-2xl p-8 text-center transition-all ${dragActive
+                                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                                    : 'border-gray-300 dark:border-gray-700 hover:border-purple-400'
+                                    }`}
+                                onDragEnter={handleDrag}
+                                onDragLeave={handleDrag}
+                                onDragOver={handleDrag}
+                                onDrop={handleDrop}
+                            >
+                                <input
+                                    type="file"
+                                    id="ai-upload"
+                                    className="hidden"
+                                    onChange={handleChange}
+                                    accept="image/*,application/pdf"
+                                    multiple
+                                />
+                                <label htmlFor="ai-upload" className="cursor-pointer flex flex-col items-center">
+                                    <div className="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4 text-purple-500 shadow-sm">
+                                        <ScanEye className="w-8 h-8" />
+                                    </div>
+                                    <p className="text-lg font-medium text-gray-900 dark:text-white mb-1">
+                                        Click to Upload or Drag & Drop
+                                    </p>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                                        Supports multiple JPG, PNG, PDF (Max 20MB Total)
+                                    </p>
+                                </label>
+                            </div>
+
+                            {/* Staging Area - Assessment Step */}
+                            {files.length > 0 && (
+                                <div className="mt-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                            <FileText size={18} /> Selected Files
+                                        </h3>
+                                        <button onClick={() => setFiles([])} className="text-xs text-red-500 hover:text-red-600 font-medium">
+                                            Clear All
+                                        </button>
+                                    </div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                                        {files.map((f, i) => (
+                                            <div key={i} className="relative group p-2 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                                                <div className="w-full h-20 bg-gray-200 dark:bg-gray-700 rounded-md mb-2 overflow-hidden flex items-center justify-center">
+                                                    {f.type.startsWith('image/') ? (
+                                                        <img src={URL.createObjectURL(f)} alt="preview" className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <span className="text-xs font-bold text-gray-500">PDF</span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs truncate font-medium dark:text-gray-300">{f.name}</p>
+                                                <p className="text-[10px] text-gray-500">{(f.size / 1024).toFixed(0)} KB</p>
+                                                <button
+                                                    onClick={() => removeFile(i)}
+                                                    className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <button
+                                        onClick={analyzeFiles}
+                                        disabled={loading}
+                                        className="w-full py-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-lg shadow-purple-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {loading ? <Loader2 className="animate-spin" /> : <ScanEye />}
+                                        {loading ? 'Analyzing...' : `Assessment Complete - Process ${files.length} Files`}
+                                    </button>
+                                    <p className="text-center text-xs text-gray-500 mt-2">
+                                        Generative AI will extract workouts from all files simultaneously.
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -399,13 +546,13 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete }) =
 
                             <div className="flex gap-3">
                                 <button
-                                    onClick={() => { setParsedData(null); setFile(null); }}
+                                    onClick={() => { setParsedData(null); setFiles([]); }}
                                     className="flex-1 py-3 px-4 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-medium hover:bg-gray-50 dark:hover:bg-gray-800"
                                 >
                                     Cancel
                                 </button>
                                 <button
-                                    onClick={handleSave}
+                                    onClick={() => handleSave()}
                                     className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 text-white font-bold hover:bg-emerald-600 shadow-lg shadow-emerald-500/20"
                                 >
                                     Confirm & Save

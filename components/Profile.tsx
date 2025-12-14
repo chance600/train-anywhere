@@ -4,8 +4,14 @@ import { supabase } from '../services/supabaseClient';
 import { Profile as ProfileType } from '../types';
 import { useTheme } from './ThemeProvider';
 import { KeyManager } from '../services/keyManager';
+import SubscriptionManager from './SubscriptionManager';
 
-const Profile: React.FC = () => {
+interface ProfileProps {
+    session: any;
+    isPro?: boolean;
+    subscriptionStatus?: string | null;
+}
+const Profile: React.FC<ProfileProps> = ({ session, isPro = false, subscriptionStatus }) => {
     const [profile, setProfile] = useState<ProfileType | null>(null);
     const [badges, setBadges] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -17,6 +23,11 @@ const Profile: React.FC = () => {
     const [hasUserKey, setHasUserKey] = useState(false);
     const [keySaved, setKeySaved] = useState(false);
 
+    interface ProfileProps {
+        session: any;
+        isPro?: boolean;
+        subscriptionStatus?: string | null;
+    }
     useEffect(() => {
         fetchProfile();
         // Load key status on mount
@@ -96,72 +107,118 @@ const Profile: React.FC = () => {
                 </button>
             </div>
 
-            {/* PRO Subscription / API Key Section [NEW] */}
+            {/* PRO Subscription Manager */}
+            <div className="mb-8">
+                <SubscriptionManager
+                    isPro={profile?.is_pro || false}
+                    onUpgrade={() => window.open(`https://buy.stripe.com/test_8x2fZhdlie3dc9p2gngfu00?client_reference_id=${profile?.id}`, '_blank')}
+                    onManage={() => window.open('https://billing.stripe.com/p/login/test_PLACEHOLDER', '_blank')}
+                />
+            </div>
+
+            {/* Privacy Settings */}
             <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-200 dark:border-gray-700 mb-8">
-                <div className="flex items-center gap-3 mb-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                            Privacy Settings
+                        </h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                            {profile?.is_public ? 'Your profile is visible on the leaderboard.' : 'Your profile is hidden from the leaderboard.'}
+                        </p>
+                    </div>
+
+                    <button
+                        onClick={async () => {
+                            if (!profile) return;
+                            const newVal = !profile.is_public;
+                            // Optimistic update
+                            setProfile({ ...profile, is_public: newVal });
+
+                            try {
+                                const { error } = await supabase
+                                    .from('profiles')
+                                    .update({ is_public: newVal })
+                                    .eq('id', profile.id);
+                                if (error) throw error;
+                            } catch (e) {
+                                console.error('Error updating privacy:', e);
+                                // Revert
+                                setProfile({ ...profile, is_public: !newVal });
+                            }
+                        }}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${profile?.is_public
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                            }`}
+                    >
+                        {profile?.is_public ? <Eye size={18} /> : <EyeOff size={18} />}
+                        {profile?.is_public ? 'Public' : 'Private'}
+                    </button>
+                </div>
+            </div>
+
+            {/* BYO Key Section (Collapsible/Alternative) */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-200 dark:border-gray-700 mb-8">
+                <div
+                    onClick={() => setShowKey(!showKey && !hasUserKey ? true : !showKey)}
+                    className="flex items-center gap-3 cursor-pointer select-none"
+                >
                     <div className={`p-2 rounded-lg ${hasUserKey ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-600' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>
                         <Key size={20} />
                     </div>
-                    <div>
-                        <h3 className="text-lg font-bold text-gray-900 dark:text-white">PRO Settings</h3>
-                        <div className="flex items-center gap-2">
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${hasUserKey ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700/50 dark:text-gray-400'}`}>
-                                {hasUserKey ? 'PRO ACTIVE' : 'FREE TIER'}
-                            </span>
-                        </div>
+                    <div className="flex-1">
+                        <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center justify-between">
+                            <span>Developer Settings (BYO Key)</span>
+                            {hasUserKey && <span className="text-xs font-bold text-purple-600 bg-purple-100 dark:bg-purple-900/40 px-2 py-1 rounded-full">ACTIVE</span>}
+                        </h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                            Provide your own Google Gemini API Key.
+                        </p>
                     </div>
                 </div>
 
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                    Enter your Google Gemini API Key to unlock advanced AI features like Workout Scanning.
-                </p>
-
-                <div className="space-y-3">
-                    <div className="relative">
-                        <input
-                            type={showKey ? "text" : "password"}
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                            placeholder="Paste your API key here..."
-                            className="w-full pl-4 pr-10 py-3 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-purple-500 dark:text-white transition-all text-sm font-mono"
-                        />
-                        <button
-                            onClick={() => setShowKey(!showKey)}
-                            className="absolute right-3 top-3.5 text-gray-400 hover:text-purple-500"
-                        >
-                            {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                    </div>
-
-                    <div className="flex gap-2">
-                        <button
-                            onClick={handleSaveKey}
-                            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${keySaved
-                                ? 'bg-green-500 text-white'
-                                : 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-500/20'
-                                }`}
-                        >
-                            {keySaved ? <CheckCircle size={16} /> : <Save size={16} />}
-                            {keySaved ? 'Saved!' : 'Save Key'}
-                        </button>
-
-                        {hasUserKey && (
+                {(showKey || hasUserKey) && (
+                    <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 space-y-3 animate-fade-in">
+                        <div className="relative">
+                            <input
+                                type={showKey ? "text" : "password"}
+                                value={apiKey}
+                                onChange={(e) => setApiKey(e.target.value)}
+                                placeholder="Paste your API key here..."
+                                className="w-full pl-4 pr-10 py-3 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-purple-500 dark:text-white transition-all text-sm font-mono"
+                            />
                             <button
-                                onClick={handleRemoveKey}
-                                className="px-3 py-2.5 rounded-xl bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-800 transition-colors"
+                                onClick={(e) => { e.stopPropagation(); setShowKey(!showKey); }}
+                                className="absolute right-3 top-3.5 text-gray-400 hover:text-purple-500"
                             >
-                                <Trash2 size={16} />
+                                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
                             </button>
-                        )}
-                    </div>
-
-                    {!hasUserKey && (
-                        <div className="mt-2 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg">
-                            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-                            <span>Don't have a key? You can get one for free from Google AI Studio. Later, you can subscribe to have us manage it for you.</span>
                         </div>
-                    )}
-                </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handleSaveKey}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${keySaved
+                                    ? 'bg-green-500 text-white'
+                                    : 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-500/20'
+                                    }`}
+                            >
+                                {keySaved ? <CheckCircle size={16} /> : <Save size={16} />}
+                                {keySaved ? 'Saved!' : 'Save Key'}
+                            </button>
+
+                            {hasUserKey && (
+                                <button
+                                    onClick={handleRemoveKey}
+                                    className="px-3 py-2.5 rounded-xl bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 border border-red-200 dark:border-red-800 transition-colors"
+                                >
+                                    <Trash2 size={16} />
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* User Info */}

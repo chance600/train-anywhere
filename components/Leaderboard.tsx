@@ -26,6 +26,7 @@ const Leaderboard: React.FC = () => {
             const { data, error } = await supabase
                 .from('profiles')
                 .select('*')
+                .eq('is_public', true) // Only show public profiles
                 .order('total_reps', { ascending: false })
                 .limit(50);
 
@@ -109,8 +110,8 @@ const Leaderboard: React.FC = () => {
                                 <button
                                     onClick={() => toggleFollow(user.id)}
                                     className={`mr-3 px-3 py-1 rounded-full text-xs font-medium transition-colors ${followedIds.has(user.id)
-                                            ? 'bg-emerald-500 text-white border border-emerald-500'
-                                            : 'bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-emerald-500 hover:text-emerald-500'
+                                        ? 'bg-emerald-500 text-white border border-emerald-500'
+                                        : 'bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-emerald-500 hover:text-emerald-500'
                                         }`}
                                 >
                                     {followedIds.has(user.id) ? 'Following' : 'Follow'}

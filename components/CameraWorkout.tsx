@@ -92,9 +92,10 @@ function createPcmBlob(data: Float32Array): { data: string, mimeType: string } {
 interface CameraWorkoutProps {
   onSaveWorkout: (session: WorkoutSession) => void;
   onFocusChange?: (isFocused: boolean) => void;
+  isPro?: boolean;
 }
 
-const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusChange }) => {
+const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusChange, isPro = false }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -451,8 +452,13 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
 
     // CHECK FOR API KEY (Safe Mode Logic)
     if (!KeyManager.hasKey()) {
-      setFeedback("⚠️ AI Coach requires a Key. Rep Counter is ON!");
-      addLog("AI Coach disabled (No Key). Vision only.");
+      if (isPro) {
+        setFeedback("Pro Active: Vision Tracking ON. (Add Key for Voice)");
+        addLog("AI Voice disabled (Requires Key). Vision Active.");
+      } else {
+        setFeedback("⚠️ AI Coach requires a Key. Rep Counter is ON!");
+        addLog("AI Coach disabled (No Key). Vision only.");
+      }
       // Do not connect, but allow the app to function visually
       return;
     }

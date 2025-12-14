@@ -17,6 +17,7 @@ export interface Profile {
   tier: string;
   // Subscription Fields
   is_pro?: boolean;
+  is_public?: boolean;
   stripe_customer_id?: string;
   subscription_status?: 'active' | 'past_due' | 'canceled' | 'trialing' | 'incomplete';
 }

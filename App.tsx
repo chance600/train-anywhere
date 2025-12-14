@@ -7,20 +7,27 @@ import MediaAnalyzer from './components/MediaAnalyzer';
 import Auth from './components/Auth';
 import Leaderboard from './components/Leaderboard';
 import Profile from './components/Profile';
-import { LayoutDashboard, Dumbbell, MessageSquare, ScanEye, Trophy, User, Sun, Moon, LogIn, FileText } from 'lucide-react';
+import { LayoutDashboard, Dumbbell, MessageSquare, ScanEye, Trophy, User, Sun, Moon, LogIn, FileText, Loader2 } from 'lucide-react';
 import { supabase } from './services/supabaseClient';
+import { Session } from '@supabase/supabase-js';
 import { ThemeProvider, useTheme } from './components/ThemeProvider';
 import WorkoutImporter from './components/WorkoutImporter';
 
 const AppContent: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
-  const [session, setSession] = useState<any>(null);
+  /* Removed duplicate session */
+  const [session, setSession] = useState<Session | null>(null);
   const [isGuest, setIsGuest] = useState(false);
   const [history, setHistory] = useState<WorkoutSession[]>([]);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const { theme, setTheme } = useTheme();
 
+  const [isPro, setIsPro] = useState(false);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+
+  // Load User Session & Profile
   useEffect(() => {
     // Load local history for guest mode first
     const saved = localStorage.getItem('workout_history');
@@ -28,20 +35,49 @@ const AppContent: React.FC = () => {
       setHistory(JSON.parse(saved));
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchHistory(session.user.id);
-    });
+    const initApp = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setSession(session);
+        if (session) {
+          await fetchProfile(session.user.id);
+          fetchHistory(session.user.id);
+        }
+      } catch (e) {
+        console.error("Init Error:", e);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    initApp();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) fetchHistory(session.user.id);
+      if (session) {
+        fetchProfile(session.user.id);
+        fetchHistory(session.user.id);
+      } else {
+        setIsPro(false);
+        setSubscriptionStatus(null);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const fetchProfile = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('is_pro, subscription_status')
+      .eq('id', userId)
+      .single();
+
+    if (data) {
+      setIsPro(data.is_pro || false);
+      setSubscriptionStatus(data.subscription_status);
+    }
+  };
 
   const fetchHistory = async (userId: string) => {
     const { data } = await supabase
@@ -98,9 +134,26 @@ const AppContent: React.FC = () => {
       const newHistory = [...history, workout];
       setHistory(newHistory);
       localStorage.setItem('workout_history', JSON.stringify(newHistory));
+
+      // Fire-and-forget Analytics Log
+      supabase.from('anonymous_workouts').insert({
+        exercise: workout.exercise,
+        reps: workout.reps
+      }).then(({ error }) => {
+        if (error) console.error('Analytics Log Error:', error);
+      });
     }
     setCurrentView(AppView.DASHBOARD);
   };
+
+  if (isInitializing) {
+    return (
+      <div className={`h-screen w-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900 transition-colors duration-300`}>
+        <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
+        <p className="text-gray-500 font-medium animate-pulse">Loading TrainAnywhere...</p>
+      </div>
+    );
+  }
 
   if (!session && !isGuest) {
     return <Auth onLogin={() => { }} onGuest={() => setIsGuest(true)} />;
@@ -111,7 +164,7 @@ const AppContent: React.FC = () => {
       case AppView.DASHBOARD:
         return <Dashboard history={history} onStartWorkout={() => setCurrentView(AppView.WORKOUT)} />;
       case AppView.WORKOUT:
-        return <CameraWorkout onSaveWorkout={handleSaveWorkout} onFocusChange={setIsFocusMode} />;
+        return <CameraWorkout onSaveWorkout={handleSaveWorkout} onFocusChange={setIsFocusMode} isPro={isPro} />;
       case AppView.COACH_CHAT:
         return <AskCoach />;
       case AppView.ANALYSIS:
@@ -119,9 +172,15 @@ const AppContent: React.FC = () => {
       case AppView.LEADERBOARD:
         return <Leaderboard />;
       case AppView.PROFILE:
-        return <Profile />;
+        return <Profile session={session} isPro={isPro} subscriptionStatus={subscriptionStatus} />;
       case AppView.IMPORT:
-        return <WorkoutImporter onImportComplete={() => setCurrentView(AppView.DASHBOARD)} />;
+        return <WorkoutImporter onImportComplete={() => {
+          if (session) {
+            fetchProfile(session.user.id);
+            fetchHistory(session.user.id);
+          }
+          setCurrentView(AppView.DASHBOARD);
+        }} isPro={isPro} />;
       default:
         return <Dashboard onStartWorkout={() => setCurrentView(AppView.WORKOUT)} />;
     }
