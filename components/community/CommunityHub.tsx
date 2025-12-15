@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
-import { Users, Trophy, Activity, Award, FlaskConical } from 'lucide-react';
+import { Users, Trophy, Activity, Award } from 'lucide-react';
 import FriendsList from './FriendsList';
 import ChallengeList from './ChallengeList';
 import ActivityFeed from './ActivityFeed';
 import Leaderboard from '../Leaderboard';
-import TrendLab from './TrendLab';
 
-type Tab = 'feed' | 'friends' | 'challenges' | 'leaderboard' | 'lab';
+type Tab = 'feed' | 'friends' | 'challenges' | 'leaderboard';
 
 interface TribeHubProps {
     onBack?: () => void;
@@ -20,7 +19,6 @@ const TribeHub: React.FC<TribeHubProps> = ({ onBack }) => {
         { key: 'friends', label: 'Friends', icon: <Users size={16} /> },
         { key: 'challenges', label: 'Compete', icon: <Trophy size={16} /> },
         { key: 'leaderboard', label: 'Ranks', icon: <Award size={16} /> },
-        { key: 'lab', label: 'Lab', icon: <FlaskConical size={16} /> },
     ];
 
     return (
@@ -61,7 +59,6 @@ const TribeHub: React.FC<TribeHubProps> = ({ onBack }) => {
                     {activeTab === 'friends' && <FriendsList />}
                     {activeTab === 'challenges' && <ChallengeList />}
                     {activeTab === 'leaderboard' && <Leaderboard />}
-                    {activeTab === 'lab' && <TrendLab />}
                 </div>
             </div>
         </div>
