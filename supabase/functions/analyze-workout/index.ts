@@ -26,28 +26,69 @@ serve(async (req) => {
         const { data: { user }, error: authError } = await supabaseClient.auth.getUser()
         if (authError || !user) throw new Error('Unauthorized')
 
-        // 2. Verify Subscription Status
-        const { data: profile, error: profileError } = await supabaseClient
-            .from('profiles')
-            .select('is_pro')
-            .eq('id', user.id)
-            .single()
+        // 2. Beta Access & Rate Limiting Logic
+        const BETA_MODE = true; // Hardcoded for Launch
+        const DAILY_LIMIT = 50;
 
-        if (profileError || !profile?.is_pro) {
-            console.error(JSON.stringify({ event: 'SUBSCRIPTION_ERROR', user: user.id, error: 'Subscription Required' }));
+        if (!BETA_MODE) {
+            // Standard Pro Check
+            const { data: profile, error: profileError } = await supabaseClient
+                .from('profiles')
+                .select('is_pro')
+                .eq('id', user.id)
+                .single()
+
+            if (profileError || !profile?.is_pro) {
+                console.error(JSON.stringify({ event: 'SUBSCRIPTION_ERROR', user: user.id, error: 'Subscription Required' }));
+                return new Response(
+                    JSON.stringify({ error: 'Subscription Required' }),
+                    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                )
+            }
+        }
+
+        // 3. Enforce Rate Limit (Service Role Client required for RLS bypass/write)
+        const serviceClient = createClient(
+            Deno.env.get('SUPABASE_URL') ?? '',
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+        )
+
+        const today = new Date().toISOString().split('T')[0];
+
+        // Get current usage
+        const { data: usage, error: usageError } = await serviceClient
+            .from('ai_usage')
+            .select('scan_count')
+            .eq('user_id', user.id)
+            .eq('date', today)
+            .single();
+
+        const currentCount = usage?.scan_count || 0;
+
+        if (currentCount >= DAILY_LIMIT) {
+            console.error(JSON.stringify({ event: 'RATE_LIMIT_EXCEEDED', user: user.id, count: currentCount }));
             return new Response(
-                JSON.stringify({ error: 'Subscription Required' }),
-                { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                JSON.stringify({ error: 'Daily scan limit reached (50/day). Please try again tomorrow.' }),
+                { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             )
         }
 
-        // 3. Process with Server-Side Key
+        // Increment Usage (Upsert)
+        const { error: upsertError } = await serviceClient
+            .from('ai_usage')
+            .upsert(
+                { user_id: user.id, date: today, scan_count: currentCount + 1 },
+                { onConflict: 'user_id, date' }
+            );
+
+        if (upsertError) console.error("Failed to track usage:", upsertError);
+
+        // 4. Process with Server-Side Key
         // Validate Payload Size
         const reqJson = await req.json()
-        const { images, prompt } = reqJson // Now expecting 'images' array
+        const { images, prompt } = reqJson
 
         // Safety: Prevent massive payloads (Limit 20MB base64)
-        // Check total size
         const totalSize = JSON.stringify(images).length;
         if (totalSize > 20 * 1024 * 1024) {
             console.error(JSON.stringify({ event: 'PAYLOAD_TOO_LARGE', user: user.id, size: totalSize }));
@@ -60,7 +101,7 @@ serve(async (req) => {
             throw new Error('Server Configuration Error')
         }
 
-        console.log(JSON.stringify({ event: 'AI_ANALYSIS_START', user: user.id, images_count: images.length }));
+        console.log(JSON.stringify({ event: 'AI_ANALYSIS_START', user: user.id, images_count: images ? images.length : 0 }));
 
         const genAI = new GoogleGenerativeAI(apiKey)
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
@@ -88,7 +129,7 @@ serve(async (req) => {
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
 
-    } catch (error) {
+    } catch (error: any) {
         console.error(JSON.stringify({ event: 'FUNCTION_ERROR', error: error.message }));
         return new Response(
             JSON.stringify({ error: error.message }),

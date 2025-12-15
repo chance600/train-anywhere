@@ -1,4 +1,5 @@
 export const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 
 export const MODEL_NAMES = {
   LIVE: 'gemini-2.5-flash-native-audio-preview-09-2025',

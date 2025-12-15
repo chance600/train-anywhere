@@ -5,8 +5,11 @@ import { useAudio } from '../hooks/useAudio';
 import { LiveConnectionState, WorkoutSession } from '../types';
 import { MODEL_NAMES, SYSTEM_INSTRUCTIONS } from '../constants';
 import { Modality, LiveServerMessage, FunctionDeclaration, Type } from '@google/genai';
-import { EXERCISE_CATALOG } from '../utils/exerciseLogic';
-import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings, Scan, EyeOff, Coffee, MessageSquare } from 'lucide-react';
+import { EXERCISE_CATALOG, detectExercise } from '../utils/exerciseLogic';
+import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings, Scan, EyeOff, Coffee, MessageSquare, Palette, Sparkles } from 'lucide-react';
+import { useToast } from './Toast';
+import '../styles/workout-skins.css';
+import SkinSelector from './workout/SkinSelector';
 
 // Declare global Pose for CDN loaded script
 declare global {
@@ -96,6 +99,7 @@ interface CameraWorkoutProps {
 }
 
 const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusChange, isPro = false }) => {
+  const { showToast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -109,8 +113,11 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   };
   const [reps, setReps] = useState(0);
   const [exercise, setExercise] = useState('Squats');
+  const [weight, setWeight] = useState(0); // [NEW] Weight Tracking
   const [feedback, setFeedback] = useState('');
   const [lastRepScore, setLastRepScore] = useState<number | null>(null);
+  const [lastRepDuration, setLastRepDuration] = useState<number | null>(null); // [NEW] Tempo tracking
+  const [avgRepDuration, setAvgRepDuration] = useState<number | null>(null); // [NEW] Tempo tracking
   const [isResting, setIsResting] = useState(false);
   const [restTime, setRestTime] = useState(60);
   const [isSendingFrame, setIsSendingFrame] = useState(false);
@@ -124,6 +131,9 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [selectedCamera, setSelectedCamera] = useState<string>('');
   const [selectedMic, setSelectedMic] = useState<string>('');
+  const [currentSkin, setCurrentSkin] = useState('default');
+  const [isPartyMode, setIsPartyMode] = useState(false); // [NEW] Toggle for fun skins
+  const [showCelebrate, setShowCelebrate] = useState(false);
   const [sensitivity, setSensitivity] = useState(0); // -20 to +20 degrees
 
   // Countdown State
@@ -152,6 +162,10 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   // [NEW] Tracking Ref for Loop
   const isTrackingActiveRef = useRef(isTrackingActive);
   const sessionHistoryRef = useRef<{ time: string, type: 'rep' | 'warning', detail: string }[]>([]);
+
+  // [NEW] Circuit Breaker Refs
+  const sessionStartTimeRef = useRef<number | null>(null);
+  const lastRepTimeRef = useRef<number>(Date.now());
 
   // Sync state to refs
   useEffect(() => { repsRef.current = reps; }, [reps]);
@@ -216,12 +230,6 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     // OR we just rely on the slider setting the initial value, and then we countdown?
     // Wait, the slider sets 'restTime'. If we countdown, we are mutating the state that the slider controls.
     // We need a separate `restDuration` vs `restTimer`.
-    // FOR NOW: Let's assume the slider sets the DESIRED rest time.
-    // When we start rest, we shouldn't reset it to 60. We should just start the countdown from whatever it is?
-    // Or better: The slider changes a `defaultRestTime`. `restTime` is the countdown.
-    // Let's check the state definitions. Line 105: const [restTime, setRestTime] = useState(60);
-    // There is no separate default.
-    // FIX: When rest ends, we reset to 60. That's the problem. It resets to 60 instead of what user chose.
     // Let's simplify: The slider sets `restTime`. When we click "Rest", we just start the timer.
     // But we need to remember what the "reset" value should be.
     // Let's add a ref or separate state for `targetRestTime`.
@@ -238,6 +246,37 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       setMics(devices.filter(d => d.kind === 'audioinput'));
     });
   }, []);
+
+  // [NEW] Circuit Breaker: Auto-disconnect on inactivity or max session time
+  useEffect(() => {
+    const MAX_SESSION_MS = 10 * 60 * 1000; // 10 minutes
+    const INACTIVITY_MS = 2 * 60 * 1000; // 2 minutes
+
+    const checkCircuitBreaker = () => {
+      if (connectionState !== LiveConnectionState.CONNECTED) return;
+      if (sessionStartTimeRef.current === null) return;
+
+      const now = Date.now();
+      const sessionDuration = now - sessionStartTimeRef.current;
+      const timeSinceLastRep = now - lastRepTimeRef.current;
+
+      if (sessionDuration > MAX_SESSION_MS) {
+        addLog("Circuit Breaker: Max Session (10 min)");
+        setFeedback("Auto-disconnected: Max session time reached.");
+        window.location.reload(); // Hard reset
+        return;
+      }
+
+      if (timeSinceLastRep > INACTIVITY_MS && !isResting) {
+        addLog("Circuit Breaker: Inactivity (2 min)");
+        setFeedback("Auto-disconnected: No activity detected.");
+        window.location.reload(); // Hard reset
+      }
+    };
+
+    const interval = setInterval(checkCircuitBreaker, 30000); // Check every 30s
+    return () => clearInterval(interval);
+  }, [connectionState, isResting]);
 
   // Sync unstable dependencies to refs to avoid restarting the effect
   const activeSessionPromiseRef = useRef(activeSessionPromise);
@@ -285,7 +324,22 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       // EXERCISE LOGIC ENGINE
       // Read from REFS to avoid stale closures
       const currentExercise = exerciseRef.current;
-      const config = EXERCISE_CATALOG[currentExercise];
+      let config = EXERCISE_CATALOG[currentExercise];
+
+      // AUTO-DETECT: Try to identify the exercise from pose data
+      const detectedExercise = detectExercise(results.poseLandmarks);
+      if (detectedExercise && detectedExercise !== currentExercise) {
+        // Update exercise ONLY if detection is different and we have a valid config
+        // This automatically switches when user changes movement
+        setExercise(detectedExercise);
+        config = EXERCISE_CATALOG[detectedExercise];
+        addLog(`Auto-detected: ${detectedExercise}`);
+      }
+
+      // If still no config after auto-detect, skip counting
+      if (!config) {
+        return;
+      }
 
       // ONLY COUNT REPS IF TRACKING IS ACTIVE (after countdown)
       if (config && isTrackingActiveRef.current) {
@@ -330,6 +384,13 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             const newReps = repsRef.current + 1;
             setReps(newReps);
             setLastRepScore(state.currentRepScore);
+            lastRepTimeRef.current = Date.now(); // [NEW] Reset Circuit Breaker Timer
+
+            // [SKIN EFFECT] Trigger celebration on rep complete (every 5 reps or high score)
+            if (results.poseLandmarks && Math.random() > 0.95) {
+              setShowCelebrate(true);
+              setTimeout(() => setShowCelebrate(false), 1000);
+            }
 
             // Calculate Duration & Motivation
             const duration = (Date.now() - state.repStartTime) / 1000;
@@ -337,6 +398,10 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             const avgDuration = state.repDurations.length > 1
               ? state.repDurations.reduce((a, b) => a + b, 0) / state.repDurations.length
               : duration;
+
+            // [NEW] Update tempo tracking UI
+            setLastRepDuration(duration);
+            setAvgRepDuration(avgDuration);
 
             sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'rep', detail: `Rep ${newReps} in ${duration.toFixed(1)}s (Score: ${state.currentRepScore})` });
 
@@ -372,17 +437,31 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         const videoWidth = isMobile ? 480 : 640;
         const videoHeight = isMobile ? 360 : 480;
 
-        const constraints: MediaStreamConstraints = {
-          video: {
-            width: videoWidth,
-            height: videoHeight,
-            deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
-            facingMode: isMobile ? 'user' : undefined
-          },
-          audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
+        const videoConstraints = {
+          width: videoWidth,
+          height: videoHeight,
+          deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
+          facingMode: isMobile ? 'user' : undefined
         };
 
-        const ms = await navigator.mediaDevices.getUserMedia(constraints);
+        let ms: MediaStream;
+        try {
+          // Try to get both video and audio
+          ms = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints,
+            audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
+          });
+        } catch (e) {
+          console.warn("Full media access failed, trying video only", e);
+          // Fallback: Video only (muted)
+          ms = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints,
+            audio: false
+          });
+          addLog("Microphone access denied. Switched to Vision Only.");
+          setFeedback("Microphone blocked. Vision running.");
+        }
+
         currentStream = ms;
         setStream(ms);
 
@@ -491,6 +570,9 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             setConnectionState(LiveConnectionState.CONNECTED);
             setFeedback("AI Coach is watching. Start moving!");
             isConnectedRef.current = true;
+            // [NEW] Initialize Circuit Breaker Timers
+            sessionStartTimeRef.current = Date.now();
+            lastRepTimeRef.current = Date.now();
             startStreaming(sessionPromise);
           },
           onmessage: async (msg: LiveServerMessage) => {
@@ -673,82 +755,148 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       date: new Date().toISOString(),
       exercise,
       reps,
-      weight: 0
+      weight: weight,
+      avgRepDuration: avgRepDuration || undefined // [NEW] Persist tempo data
     });
     setReps(0); // Reset for next set
-    alert("Set saved!");
+    setLastRepDuration(null);
+    setAvgRepDuration(null);
+    exerciseStateRef.current.repDurations = []; // Reset for next set
+    showToast("Set saved!", "success");
   };
 
   // Determine content to render for the camera view (Video + Overlays)
   const cameraLayer = (
     <div className={`overflow-hidden bg-black transition-all duration-500 ${focusMode ? 'fixed inset-0 z-50 w-full h-full rounded-none m-0' : 'relative flex-1 rounded-xl m-2 border border-gray-700'}`}>
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
-      />
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full object-cover pointer-events-none transform scale-x-[-1]"
-      />
+      {/* Party Mode Toggle (Top Right) */}
+      {!focusMode && (
+        <button
+          onClick={() => setIsPartyMode(!isPartyMode)}
+          className={`absolute top-4 right-4 z-20 p-2 rounded-full backdrop-blur-md transition-all ${isPartyMode ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50' : 'bg-black/40 text-white/50 hover:bg-black/60 hover:text-white'
+            }`}
+          title="Toggle Party Mode"
+        >
+          {isPartyMode ? <Sparkles size={20} className="animate-pulse" /> : <Palette size={20} />}
+        </button>
+      )}
+
+      {/* Main Camera View */}
+      <div className={`relative w-full h-full aspect-video bg-black overflow-hidden group ${isPartyMode && currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
+        <video
+          ref={videoRef}
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
+          playsInline
+          muted
+          autoPlay
+        />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
+        />
+
+        {/* Skin Celebration Effect */}
+        {isPartyMode && showCelebrate && <div className="celebration-burst" />}
+      </div>
+
+      {/* Party Mode Skin Selector (Bottom Center) */}
+      {
+        isPartyMode && !focusMode && (
+          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-20 pointer-events-auto animate-in slide-in-from-bottom-4 fade-in duration-300">
+            <SkinSelector currentSkin={currentSkin} onSelectSkin={setCurrentSkin} />
+          </div>
+        )
+      }
 
       {/* Standard Info Overlays (Hidden in Focus Mode) */}
-      {!focusMode && (
-        <>
-          <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
-            <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
-              <p className="text-white font-mono text-sm">{connectionState === LiveConnectionState.CONNECTED ? "LIVE TRACKING" : "OFFLINE"}</p>
-            </div>
-            {connectionState === LiveConnectionState.CONNECTED && (
-              <div className="flex items-center gap-2 mt-2">
-                <Activity size={12} className={isSendingFrame ? "text-green-400" : "text-gray-600"} />
-                <span className="text-[10px] text-gray-400">Stream Active</span>
+      {
+        !focusMode && (
+          <>
+            <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
+              <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${connectionState === LiveConnectionState.CONNECTED ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`}></div>
+                <p className="text-white font-mono text-sm">{connectionState === LiveConnectionState.CONNECTED ? "LIVE TRACKING" : "OFFLINE"}</p>
               </div>
-            )}
-          </div>
-
-          {/* Standard Rep Counter (Top Right) */}
-          <div className="absolute top-4 right-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-right">
-            <div className="text-2xl font-bold text-white leading-none">{reps}</div>
-            <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Reps</div>
-          </div>
-
-          {/* Debug Log */}
-          <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800 opacity-50 hover:opacity-100 transition-opacity">
-            <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
-              <Terminal size={10} />
-              <span>System Log</span>
+              {connectionState === LiveConnectionState.CONNECTED && (
+                <div className="flex items-center gap-2 mt-2">
+                  <Activity size={12} className={isSendingFrame ? "text-green-400" : "text-gray-600"} />
+                  <span className="text-[10px] text-gray-400">Stream Active</span>
+                </div>
+              )}
+              {!EXERCISE_CATALOG[exercise] && (
+                <div className="mt-1 px-1.5 py-0.5 bg-blue-500/20 border border-blue-500/30 rounded text-[10px] text-blue-300 font-mono">
+                  Universal Vision Mode
+                </div>
+              )}
             </div>
-            {logs.map((log, i) => (
-              <div key={i} className="truncate opacity-80">{log}</div>
-            ))}
-          </div>
-        </>
-      )}
+
+            {/* Standard Rep Counter (Top Right) */}
+            <div className="absolute top-4 right-4 flex gap-2">
+              <div
+                onClick={() => {
+                  const newWeight = prompt("Enter weight (lbs):", weight.toString());
+                  if (newWeight && !isNaN(Number(newWeight))) setWeight(Number(newWeight));
+                }}
+                className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-center min-w-[60px] cursor-pointer hover:bg-black/80"
+              >
+                <div className="text-2xl font-bold text-white leading-none">{weight}</div>
+                <div className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">Lbs</div>
+              </div>
+
+              <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-right min-w-[60px]">
+                <div className="text-2xl font-bold text-white leading-none">{reps}</div>
+                <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Reps</div>
+              </div>
+
+              {/* TEMPO TRACKING [NEW] */}
+              <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-center min-w-[70px]">
+                <div className="text-2xl font-bold text-amber-400 leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {lastRepDuration ? lastRepDuration.toFixed(1) : '--'}
+                </div>
+                <div className="text-[10px] text-amber-400/70 font-bold uppercase tracking-wider">Last (s)</div>
+                {avgRepDuration && (
+                  <div className="text-[9px] text-gray-400 mt-0.5">
+                    Avg: {avgRepDuration.toFixed(1)}s
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Debug Log */}
+            <div className="absolute bottom-32 right-4 w-64 bg-black/80 rounded-lg p-2 font-mono text-[10px] text-green-400 z-10 pointer-events-none border border-gray-800 opacity-50 hover:opacity-100 transition-opacity">
+              <div className="flex items-center gap-2 border-b border-gray-700 pb-1 mb-1 text-gray-400">
+                <Terminal size={10} />
+                <span>System Log</span>
+              </div>
+              {logs.map((log, i) => (
+                <div key={i} className="truncate opacity-80">{log}</div>
+              ))}
+            </div>
+          </>
+        )
+      }
 
       {/* Countdown Overlay */}
-      {(isCountingDown || countdown === 0) && (
-        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-          <div className="text-center">
-            {countdown > 0 ? (
-              <>
-                <div className="text-9xl font-bold text-emerald-400 animate-pulse" style={{ textShadow: '0 0 40px rgba(16, 185, 129, 0.8)' }}>
-                  {countdown}
+      {
+        (isCountingDown || countdown === 0) && (
+          <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+            <div className="text-center">
+              {countdown > 0 ? (
+                <>
+                  <div className="text-9xl font-bold text-emerald-400 animate-pulse" style={{ textShadow: '0 0 40px rgba(16, 185, 129, 0.8)' }}>
+                    {countdown}
+                  </div>
+                  <div className="text-2xl text-white mt-4 font-bold drop-shadow-md">Get Ready...</div>
+                </>
+              ) : (
+                <div className="text-8xl font-bold text-green-500 animate-bounce" style={{ textShadow: '0 0 60px rgba(34, 197, 94, 1)' }}>
+                  GO!
                 </div>
-                <div className="text-2xl text-white mt-4 font-bold drop-shadow-md">Get Ready...</div>
-              </>
-            ) : (
-              <div className="text-8xl font-bold text-green-500 animate-bounce" style={{ textShadow: '0 0 60px rgba(34, 197, 94, 1)' }}>
-                GO!
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Feedback Overlay */}
       <div className={`absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300 ${!feedback ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
@@ -756,38 +904,67 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       </div>
 
       {/* Focus Mode Specific Overlays */}
-      {focusMode && (
-        <div className="absolute inset-0 z-50 pointer-events-none">
-          {/* Top Bar Stats */}
-          <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start z-30 bg-gradient-to-b from-black/80 to-transparent">
-            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 pointer-events-auto">
-              <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {reps}
+      {
+        focusMode && (
+          <div className="absolute inset-0 z-50 pointer-events-none">
+            {/* Top Bar Stats */}
+            <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start z-30 bg-gradient-to-b from-black/80 to-transparent">
+              <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 pointer-events-auto">
+                <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {reps}
+                </div>
+                <div className="text-emerald-400 font-bold text-sm tracking-widest uppercase">Reps</div>
               </div>
-              <div className="text-emerald-400 font-bold text-sm tracking-widest uppercase">Reps</div>
+
+              {/* WEIGHT CONTROL [NEW] */}
+              <div
+                onClick={() => {
+                  const newWeight = prompt("Enter weight (lbs):", weight.toString());
+                  if (newWeight && !isNaN(Number(newWeight))) setWeight(Number(newWeight));
+                }}
+                className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center pointer-events-auto cursor-pointer hover:bg-white/10 transition-colors"
+              >
+                <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {weight}
+                </div>
+                <div className="text-blue-400 font-bold text-sm tracking-widest uppercase">Lbs</div>
+              </div>
+
+              <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-right pointer-events-auto">
+                <div className={`text-4xl font-bold mb-1 ${lastRepScore && lastRepScore > 80 ? 'text-emerald-400' : lastRepScore && lastRepScore > 50 ? 'text-yellow-400' : 'text-red-400'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {lastRepScore || '--'}
+                </div>
+                <div className="text-gray-400 font-bold text-sm tracking-widest uppercase">Form Score</div>
+              </div>
+
+              {/* TEMPO TRACKING - Focus Mode [NEW] */}
+              <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center pointer-events-auto">
+                <div className="text-4xl font-bold text-amber-400 mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {lastRepDuration ? lastRepDuration.toFixed(1) : '--'}
+                </div>
+                <div className="text-amber-400/70 font-bold text-sm tracking-widest uppercase">Tempo (s)</div>
+                {avgRepDuration && (
+                  <div className="text-xs text-gray-400 mt-1">
+                    Avg: {avgRepDuration.toFixed(1)}s
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-right pointer-events-auto">
-              <div className={`text-4xl font-bold mb-1 ${lastRepScore > 80 ? 'text-emerald-400' : lastRepScore > 50 ? 'text-yellow-400' : 'text-red-400'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {lastRepScore}
-              </div>
-              <div className="text-gray-400 font-bold text-sm tracking-widest uppercase">Form Score</div>
+            {/* Exit Button - Floating at bottom */}
+            <div className="absolute bottom-10 left-0 right-0 flex justify-center z-50 pointer-events-auto">
+              <button
+                onClick={() => toggleFocus(false)}
+                className="group bg-black/40 hover:bg-red-500/80 text-white/80 hover:text-white px-6 py-3 rounded-full backdrop-blur-md transition-all border border-white/10 hover:border-red-400 shadow-2xl flex items-center gap-3"
+              >
+                <EyeOff size={20} className="group-hover:scale-110 transition-transform" />
+                <span className="font-medium tracking-wide text-sm">EXIT FOCUS</span>
+              </button>
             </div>
           </div>
-
-          {/* Exit Button - Floating at bottom */}
-          <div className="absolute bottom-10 left-0 right-0 flex justify-center z-50 pointer-events-auto">
-            <button
-              onClick={() => toggleFocus(false)}
-              className="group bg-black/40 hover:bg-red-500/80 text-white/80 hover:text-white px-6 py-3 rounded-full backdrop-blur-md transition-all border border-white/10 hover:border-red-400 shadow-2xl flex items-center gap-3"
-            >
-              <EyeOff size={20} className="group-hover:scale-110 transition-transform" />
-              <span className="font-medium tracking-wide text-sm">EXIT FOCUS</span>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 
 

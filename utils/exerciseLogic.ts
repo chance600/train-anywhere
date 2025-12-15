@@ -260,3 +260,97 @@ export const EXERCISE_CATALOG: Record<string, ExerciseConfig> = {
     }
   }
 };
+
+/**
+ * AUTO-DETECT EXERCISE
+ * Analyzes current pose and determines the most likely exercise.
+ * Uses body orientation and key joint angles.
+ */
+export const detectExercise = (landmarks: Point[]): string | null => {
+  if (!landmarks || landmarks.length < 33) return null;
+
+  // Key landmarks
+  const leftShoulder = landmarks[11];
+  const rightShoulder = landmarks[12];
+  const leftHip = landmarks[23];
+  const rightHip = landmarks[24];
+  const leftKnee = landmarks[25];
+  const rightKnee = landmarks[26];
+  const leftAnkle = landmarks[27];
+  const rightAnkle = landmarks[28];
+  const leftElbow = landmarks[13];
+  const rightElbow = landmarks[14];
+  const leftWrist = landmarks[15];
+  const rightWrist = landmarks[16];
+
+  // Safety checks
+  if (!leftShoulder || !leftHip || !leftKnee || !leftAnkle) return null;
+
+  // Calculate key angles and metrics
+  const kneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+  const elbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+  const torsoAngle = calculateAngle(leftShoulder, leftHip, leftAnkle);
+  const shoulderHipAngle = calculateAngle(leftElbow, leftShoulder, leftHip);
+
+  // Body orientation: Is person horizontal (plank) or vertical (standing)?
+  const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+  const hipY = (leftHip.y + rightHip.y) / 2;
+  const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
+
+  const isHorizontal = Math.abs(shoulderY - ankleY) < 0.3; // Normalized coords
+  const isVertical = !isHorizontal && hipY > shoulderY; // Standing
+
+  // Arm position: Are arms raised?
+  const armsRaised = shoulderHipAngle > 120;
+
+  // CLASSIFICATION LOGIC (Heuristic-based)
+
+  // 1. PUSHUPS: Horizontal body, elbow bending
+  if (isHorizontal && elbowAngle < 130 && torsoAngle > 150) {
+    return 'Pushups';
+  }
+
+  // 2. PLANK: Horizontal body, straight arms, stable
+  if (isHorizontal && elbowAngle > 150 && torsoAngle > 160) {
+    return 'Plank';
+  }
+
+  // 3. MOUNTAIN CLIMBERS: Horizontal, one knee tucked
+  if (isHorizontal && (kneeAngle < 120 || calculateAngle(rightHip, rightKnee, rightAnkle) < 120)) {
+    return 'Mountain Climbers';
+  }
+
+  // 4. SQUATS: Vertical, deep knee bend
+  if (isVertical && kneeAngle < 130 && torsoAngle > 100) {
+    return 'Squats';
+  }
+
+  // 5. LUNGES: Vertical, one knee forward (asymmetric)
+  if (isVertical && kneeAngle < 130) {
+    const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+    if (Math.abs(kneeAngle - rightKneeAngle) > 30) {
+      return 'Lunges';
+    }
+  }
+
+  // 6. JUMPING JACKS: Vertical, arms raised
+  if (isVertical && armsRaised && kneeAngle > 150) {
+    return 'Jumping Jacks';
+  }
+
+  // 7. BICEP CURLS: Vertical, elbow bending, upper arm stationary
+  if (isVertical && elbowAngle < 90 && shoulderHipAngle < 30) {
+    return 'Bicep Curls';
+  }
+
+  // 8. SITUPS: Lying down, torso curling
+  if (!isVertical && torsoAngle < 100) {
+    return 'Situps';
+  }
+
+  // 9. BURPEES: Complex - detect by rapid vertical changes (needs history)
+  // Simplified: If we see a squat-like position after a plank-like position
+  // For now, we don't auto-detect Burpees (too complex without history)
+
+  return null; // Unknown
+};

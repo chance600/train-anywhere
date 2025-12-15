@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { User, Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
+import { useToast } from './Toast';
 
 interface AuthProps {
     onLogin: () => void;
@@ -8,11 +9,14 @@ interface AuthProps {
 }
 
 const Auth: React.FC<AuthProps> = ({ onLogin, onGuest }) => {
+    const { showToast } = useToast();
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+
+    const [waiverAccepted, setWaiverAccepted] = useState(false);
 
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -25,6 +29,10 @@ const Auth: React.FC<AuthProps> = ({ onLogin, onGuest }) => {
                 if (error) throw error;
                 onLogin();
             } else {
+                if (!waiverAccepted) {
+                    throw new Error("You must accept the Liability Waiver to join.");
+                }
+
                 const { error } = await supabase.auth.signUp({
                     email,
                     password,
@@ -33,7 +41,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, onGuest }) => {
                     }
                 });
                 if (error) throw error;
-                alert('Check your email for the confirmation link!');
+                showToast('Check your email for the confirmation link!', 'success');
             }
         } catch (err: any) {
             setError(err.message);
@@ -95,10 +103,26 @@ const Auth: React.FC<AuthProps> = ({ onLogin, onGuest }) => {
                         </div>
                     </div>
 
+                    {/* Liability Waiver (Sign Up Only) */}
+                    {!isLogin && (
+                        <div className="flex items-start gap-3 p-3 bg-gray-700/50 rounded-lg border border-gray-600">
+                            <input
+                                type="checkbox"
+                                id="waiver"
+                                checked={waiverAccepted}
+                                onChange={(e) => setWaiverAccepted(e.target.checked)}
+                                className="mt-1 w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-gray-800 border-gray-600"
+                            />
+                            <label htmlFor="waiver" className="text-xs text-gray-300">
+                                I acknowledge that exercise involves risk of injury. I voluntarily assume all risks and release <strong>FitAI Coach</strong> from liability. I agree to the <span className="text-emerald-400 underline cursor-pointer" onClick={() => alert("Standard Beta Waiver:\n\n1. Use at your own risk.\n2. Consult a doctor before starting.\n3. AI advice is not medical advice.")}>Terms & Waiver</span>.
+                            </label>
+                        </div>
+                    )}
+
                     <button
                         type="submit"
                         disabled={loading}
-                        className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                        className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {loading ? <Loader2 className="animate-spin" /> : (isLogin ? 'Sign In' : 'Sign Up')}
                     </button>
