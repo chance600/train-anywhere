@@ -342,10 +342,17 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         });
 
         setStream(ms);
+        const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9);
+
+        // ... (existing code)
+
         if (videoRef.current) {
           videoRef.current.srcObject = ms;
           videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play();
+            if (videoRef.current) {
+              setVideoAspectRatio(videoRef.current.videoWidth / videoRef.current.videoHeight);
+              videoRef.current.play();
+            }
             // Start Loop
             requestVideoFrameCallbackLoop();
           };
@@ -876,7 +883,10 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       )}
 
       {/* Main Camera View */}
-      <div className={`relative w-full h-full aspect-video bg-black overflow-hidden group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
+      <div
+        className={`relative w-full bg-black overflow-hidden group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}
+        style={{ aspectRatio: videoAspectRatio }}
+      >
         <video
           ref={videoRef}
           className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"

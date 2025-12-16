@@ -71,6 +71,7 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
         const transformY = (y: number) => y * height;
 
         // 1. Draw Skeleton (Cyber Style)
+        // Use Cyber Style but keep it aligned
         if (data.pose && data.pose.landmarks && data.pose.landmarks[0]) {
             const landmarks = data.pose.landmarks[0];
 
@@ -98,58 +99,6 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
                     ctx.lineTo(transformX(p2.x), transformY(p2.y));
                     ctx.stroke();
                 }
-            });
-
-            // 2. Heuristic "Chin-up Bar" (Virtual Bar)
-            // Connect Left Wrist (15) to Right Wrist (16)
-            const lw = landmarks[15];
-            const rw = landmarks[16];
-            if (lw && rw) {
-                ctx.strokeStyle = '#39ff14'; // Neon Green
-                ctx.lineWidth = 4;
-                ctx.beginPath();
-                ctx.moveTo(transformX(lw.x), transformY(lw.y));
-                ctx.lineTo(transformX(rw.x), transformY(rw.y));
-                ctx.stroke();
-
-                // Label
-                ctx.fillStyle = '#39ff14';
-                ctx.font = '12px Courier';
-                ctx.fillText("VIRTUAL BAR", (transformX(lw.x) + transformX(rw.x)) / 2 - 40, (transformY(lw.y) + transformY(rw.y)) / 2 - 10);
-            }
-        }
-
-        // 3. Draw Object Detection (Iron Man HUD)
-        if (showVelocity && data.objects.length > 0) {
-            data.objects.forEach(obj => {
-                const [x, y, w, h] = obj.bbox;
-                // Transform BBox
-                // BBox from TFJS is in pixels [x, y, w, h]. Need to mirror X if needed.
-                let dx = x;
-                if (isMirrored) {
-                    dx = width - (x + w);
-                }
-
-                // Draw Bracket (Iron Man Corner Style)
-                ctx.strokeStyle = '#ff3333';
-                ctx.lineWidth = 2;
-                ctx.shadowBlur = 5;
-                ctx.shadowColor = '#ff3333';
-
-                const lineLen = 15;
-                // Top Left
-                ctx.beginPath(); ctx.moveTo(dx, y + lineLen); ctx.lineTo(dx, y); ctx.lineTo(dx + lineLen, y); ctx.stroke();
-                // Top Right
-                ctx.beginPath(); ctx.moveTo(dx + w - lineLen, y); ctx.lineTo(dx + w, y); ctx.lineTo(dx + w, y + lineLen); ctx.stroke();
-                // Bottom Left
-                ctx.beginPath(); ctx.moveTo(dx, y + h - lineLen); ctx.lineTo(dx, y + h); ctx.lineTo(dx + lineLen, y + h); ctx.stroke();
-                // Bottom Right
-                ctx.beginPath(); ctx.moveTo(dx + w - lineLen, y + h); ctx.lineTo(dx + w, y + h); ctx.lineTo(dx + w, y + h - lineLen); ctx.stroke();
-
-                // Label
-                ctx.fillStyle = '#ff3333';
-                ctx.font = 'bold 14px Arial';
-                ctx.fillText(obj.class.toUpperCase(), dx + 5, y - 5);
             });
         }
 
