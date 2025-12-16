@@ -1,6 +1,4 @@
--- Force update of Challenges RLS policy
--- This addresses potential issues where the policy wasn't applied or is stale
-
+-- Force update of Challenges RLS policy to allow ANON access
 drop policy if exists "View public or own challenges" on challenges;
 
 create policy "View public or own challenges"
