@@ -284,8 +284,8 @@ const ChallengeList: React.FC = () => {
                                     <button
                                         onClick={() => isJoined ? leaveChallenge(challenge.id) : joinChallenge(challenge.id)}
                                         className={`px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-1 transition-colors ${isJoined
-                                                ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-red-100 hover:text-red-600'
-                                                : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-red-100 hover:text-red-600'
+                                            : 'bg-emerald-500 hover:bg-emerald-600 text-white'
                                             }`}
                                     >
                                         {isJoined ? 'Leave' : 'Join'}
