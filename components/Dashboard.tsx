@@ -2,8 +2,9 @@ import React from 'react';
 import { WorkoutSession } from '../types';
 import ReadinessCard from './dashboard/ReadinessCard';
 import InsightsCard from './dashboard/InsightsCard';
+import FeaturedChallenge from './dashboard/FeaturedChallenge';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { Flame, Play, Calendar, Upload, MessageCircle } from 'lucide-react';
+import { Flame, Play, Calendar, Upload, MessageCircle, TrendingUp } from 'lucide-react';
 import { WorkoutPlan } from '../types';
 
 interface DashboardProps {
@@ -123,6 +124,38 @@ const Dashboard: React.FC<DashboardProps> = ({ history, onStartWorkout, onImport
         </button>
       </div>
 
+      {/* Hero Stats Row - Now with Featured Challenge */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="space-y-4">
+          {/* Streak Card - Gamified */}
+          <div className="bg-gradient-to-br from-orange-500 to-red-600 p-5 rounded-2xl flex items-center justify-between text-white shadow-lg shadow-orange-500/20 relative overflow-hidden group">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 rounded-full blur-2xl -mr-6 -mt-6"></div>
+            <div>
+              <p className="text-orange-100 text-xs uppercase font-bold tracking-wider mb-1">Day Streak</p>
+              <p className="text-4xl font-black flex items-center gap-2">
+                {streak} <span className="text-lg font-medium opacity-80">days</span>
+              </p>
+            </div>
+            <div className={`w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm ${streak > 0 ? "animate-pulse" : ""}`}>
+              <Flame size={28} className="text-white fill-white" />
+            </div>
+          </div>
+
+          {/* Volume Check */}
+          <div className="bg-gray-50 dark:bg-gray-800 p-5 rounded-2xl border border-gray-200 dark:border-gray-700 flex items-center justify-between">
+            <div>
+              <p className="text-gray-500 dark:text-gray-400 text-xs uppercase font-bold">Latest Volume</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
+                {history.length > 0 ? (history[history.length - 1].reps * history[history.length - 1].weight).toLocaleString() : 0} <span className="text-sm text-gray-400 font-normal">kg</span>
+              </p>
+            </div>
+            <TrendingUp className="text-emerald-500" size={24} />
+          </div>
+        </div>
+
+        {/* Injects the Featured Challenge here if available */}
+        <FeaturedChallenge />
+      </div>
 
 
       {/* Weekly Insights */}
@@ -196,21 +229,7 @@ const Dashboard: React.FC<DashboardProps> = ({ history, onStartWorkout, onImport
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-6 sm:mb-8">
-        <div className="bg-gray-50 dark:bg-gray-800 p-5 sm:p-4 rounded-xl flex flex-col justify-between relative overflow-hidden min-h-[100px] sm:min-h-auto border border-gray-200 dark:border-gray-700 transition-colors">
-          <div>
-            <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-xs uppercase font-medium">Day Streak</p>
-            <p className="text-4xl sm:text-3xl font-bold text-orange-500 flex items-center gap-2 mt-2 sm:mt-0">
-              {streak} <Flame size={28} fill="currentColor" className={`sm:w-6 sm:h-6 ${streak > 0 ? "animate-pulse" : "text-gray-400 dark:text-gray-600"}`} />
-            </p>
-          </div>
-          {streak > 3 && <div className="absolute -right-4 -bottom-4 opacity-10"><Flame size={100} /></div>}
-        </div>
-        <div className="bg-gray-50 dark:bg-gray-800 p-5 sm:p-4 rounded-xl min-h-[100px] sm:min-h-auto border border-gray-200 dark:border-gray-700 transition-colors">
-          <p className="text-gray-500 dark:text-gray-400 text-sm sm:text-xs uppercase font-medium">Recent Volume</p>
-          <p className="text-4xl sm:text-3xl font-bold mt-2 sm:mt-0 text-gray-900 dark:text-white">{history.length > 0 ? (history[history.length - 1].reps * history[history.length - 1].weight) : 0} <span className="text-base sm:text-sm text-gray-500">kg</span></p>
-        </div>
-      </div>
+      {/* Moved Streak and Volume from here to top */}
 
       <div className="bg-gray-50 dark:bg-gray-800 p-5 sm:p-4 rounded-xl h-72 sm:h-64 mb-6 border border-gray-200 dark:border-gray-700 transition-colors">
         <h3 className="text-base sm:text-sm font-bold text-gray-700 dark:text-gray-300 mb-4">Volume (Last 7 Sets)</h3>
