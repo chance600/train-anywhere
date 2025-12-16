@@ -123,9 +123,7 @@ const Dashboard: React.FC<DashboardProps> = ({ history, onStartWorkout, onImport
         </button>
       </div>
 
-      <div className="mb-6">
-        <ReadinessCard />
-      </div>
+
 
       {/* Weekly Insights */}
       <div className="mb-6">
@@ -247,6 +245,9 @@ const Dashboard: React.FC<DashboardProps> = ({ history, onStartWorkout, onImport
           ))}
           {history.length === 0 && <p className="text-gray-500 text-center py-6 sm:py-4">No workouts logged yet.</p>}
         </div>
+      </div>
+      <div className="mb-6">
+        <ReadinessCard />
       </div>
     </div>
   );
