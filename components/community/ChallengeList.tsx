@@ -237,15 +237,16 @@ const ChallengeList: React.FC = () => {
             )}
 
             {/* Active Challenges */}
-            <div className="space-y-3">
-                <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                    <Trophy size={16} /> Active Challenges
+            <div className="space-y-4">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 pl-1">
+                    <Trophy size={14} /> Active Challenges
                 </h4>
 
                 {challenges.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                        <Trophy size={40} className="mx-auto mb-2 opacity-50" />
-                        <p className="text-sm">No active challenges. Create one above!</p>
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 text-center shadow-sm border border-gray-100 dark:border-gray-700">
+                        <Trophy size={48} className="mx-auto mb-3 text-yellow-500 opacity-50" />
+                        <h3 className="font-bold text-gray-900 dark:text-white">No active challenges</h3>
+                        <p className="text-sm text-gray-500 mt-1">Be the first to start a competition!</p>
                     </div>
                 ) : (
                     challenges.map(challenge => {
@@ -253,42 +254,48 @@ const ChallengeList: React.FC = () => {
                         const daysLeft = Math.ceil((new Date(challenge.end_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
                         return (
-                            <div key={challenge.id} className="bg-gray-50 dark:bg-gray-800 rounded-xl overflow-hidden">
-                                <div className={`bg-gradient-to-r ${getChallengeColor(challenge.challenge_type)} p-4`}>
-                                    <div className="flex items-start justify-between">
-                                        <div className="flex items-center gap-3">
-                                            <div className="bg-white/20 p-2 rounded-lg">
-                                                {getChallengeIcon(challenge.challenge_type)}
-                                            </div>
-                                            <div>
-                                                <h5 className="font-bold text-white">{challenge.name}</h5>
-                                                <p className="text-white/80 text-xs capitalize">{challenge.challenge_type.replace('_', ' ')}</p>
-                                            </div>
+                            <div key={challenge.id} className="relative group bg-white dark:bg-gray-800 rounded-3xl p-1 shadow-lg hover:shadow-xl transition-all hover:scale-[1.01]">
+                                <div className={`h-24 rounded-t-[1.3rem] rounded-b-xl bg-gradient-to-r ${getChallengeColor(challenge.challenge_type)} relative overflow-hidden`}>
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/20 rounded-full blur-2xl -mr-10 -mt-10"></div>
+                                    <div className="absolute bottom-4 left-4 flex items-center gap-3">
+                                        <div className="bg-white/20 backdrop-blur-md p-2.5 rounded-xl text-white shadow-inner">
+                                            {getChallengeIcon(challenge.challenge_type)}
                                         </div>
-                                        <div className="text-right">
-                                            <div className="text-white/80 text-xs">{daysLeft} days left</div>
-                                            <div className="text-white flex items-center gap-1 text-sm">
-                                                <Users size={14} />
-                                                {challenge.participant_count}
-                                            </div>
+                                        <div>
+                                            <h5 className="font-bold text-white text-lg leading-tight shadow-sm">{challenge.name}</h5>
+                                            <p className="text-white/90 text-xs font-medium uppercase tracking-wider">{challenge.challenge_type.replace('_', ' ')}</p>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="p-4 flex items-center justify-between">
+
+                                <div className="p-5">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div className="flex items-center gap-4 text-sm text-gray-500">
+                                            <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-700 px-2.5 py-1 rounded-lg">
+                                                <Calendar size={14} />
+                                                <span className="font-medium text-gray-700 dark:text-gray-300">{daysLeft > 0 ? `${daysLeft} days left` : 'Ended'}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                                <Users size={14} />
+                                                <span className="font-medium">{challenge.participant_count} Runners</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     {challenge.description && (
-                                        <p className="text-sm text-gray-600 dark:text-gray-400 flex-1 mr-4 line-clamp-1">
+                                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-5 line-clamp-2 leading-relaxed pl-1">
                                             {challenge.description}
                                         </p>
                                     )}
+
                                     <button
                                         onClick={() => isJoined ? leaveChallenge(challenge.id) : joinChallenge(challenge.id)}
-                                        className={`px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-1 transition-colors ${isJoined
-                                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-red-100 hover:text-red-600'
-                                            : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                                        className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${isJoined
+                                            ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20'
+                                            : 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 hover:scale-[1.02] shadow-lg shadow-gray-900/20'
                                             }`}
                                     >
-                                        {isJoined ? 'Leave' : 'Join'}
-                                        <ChevronRight size={16} />
+                                        {isJoined ? 'Leave Challenge' : 'Join Challenge'}
                                     </button>
                                 </div>
                             </div>

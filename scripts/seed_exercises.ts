@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
@@ -25,141 +24,64 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !GEMINI_API_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
+// const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+// const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
-const SAMPLE_EXERCISES = [
-    {
-        id: "0001",
-        name: "Barbell Bench Press",
-        body_part: "chest",
-        equipment: "barbell",
-        target: "pectorals",
-        gif_url: "https://v2.exercisedb.io/image/3/4/sit-up.gif", // Placeholder
-        instructions: ["Lie on bench", "Lower bar to chest", "Press up"]
-    },
-    {
-        id: "0002",
-        name: "Dumbbell Fly",
-        body_part: "chest",
-        equipment: "dumbbell",
-        target: "pectorals",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0003",
-        name: "Push Up",
-        body_part: "chest",
-        equipment: "body weight",
-        target: "pectorals",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0004",
-        name: "Squat",
-        body_part: "legs",
-        equipment: "barbell",
-        target: "quads",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0005",
-        name: "Deadlift",
-        body_part: "back",
-        equipment: "barbell",
-        target: "spinal erectors",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0006",
-        name: "Pull Up",
-        body_part: "back",
-        equipment: "body weight",
-        target: "lats",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0007",
-        name: "Shoulder Press",
-        body_part: "shoulders",
-        equipment: "dumbbell",
-        target: "deltoids",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0008",
-        name: "Lateral Raise",
-        body_part: "shoulders",
-        equipment: "dumbbell",
-        target: "deltoids",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0009",
-        name: "Lunges",
-        body_part: "legs",
-        equipment: "body weight",
-        target: "glutes",
-        gif_url: "",
-        instructions: []
-    },
-    {
-        id: "0010",
-        name: "Plank",
-        body_part: "waist",
-        equipment: "body weight",
-        target: "core",
-        gif_url: "",
-        instructions: []
-    }
-];
+const EXERCISE_DB_URL = "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/dist/exercises.json";
+
+// Rate Limiting Helper
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function seed() {
-    console.log("🌱 Starting Seed...");
+    console.log("🌱 Starting Massive Seed...");
 
-    for (const ex of SAMPLE_EXERCISES) {
-        console.log(`Processing: ${ex.name}`);
+    try {
+        console.log("⬇️  Fetching Exercise Database...");
+        const response = await fetch(EXERCISE_DB_URL);
+        if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
 
-        // 1. Upsert Exercise
-        const { error: dbError } = await supabase
-            .from('exercises')
-            .upsert(ex);
+        const rawExercises = await response.json();
+        console.log(`📦 Fetched ${rawExercises.length} exercises. Transforming...`);
 
-        if (dbError) {
-            console.error(`Error inserting ${ex.name}:`, dbError);
-            continue;
+        // Transform to our Schema
+        const exercises = rawExercises.map((ex: any) => ({
+            id: ex.id,
+            name: ex.name,
+            body_part: ex.category, // Map category to body_part
+            equipment: ex.equipment || "body weight",
+            target: ex.primaryMuscles && ex.primaryMuscles.length > 0 ? ex.primaryMuscles[0] : ex.category,
+            // Use first image if available
+            gif_url: ex.images && ex.images.length > 0 ? `https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/${ex.images[0]}` : "",
+            instructions: ex.instructions || [],
+            secondary_muscles: ex.secondaryMuscles || []
+        }));
+
+        console.log("🚀 Starting Batch Ingestion...");
+
+        const BATCH_SIZE = 50;
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; i < exercises.length; i += BATCH_SIZE) {
+            const batch = exercises.slice(i, i + BATCH_SIZE);
+
+            // 1. Upsert Data
+            const { error } = await supabase.from('exercises').upsert(batch, { onConflict: 'id' as any });
+
+            if (error) {
+                console.error(`❌ Batch ${i} Error:`, error.message);
+                failCount += batch.length;
+            } else {
+                successCount += batch.length;
+                process.stdout.write(`\r✅ Ingested: ${successCount} / ${exercises.length}`);
+            }
         }
 
-        // 2. Generate Embedding
-        // We embed the "concept": Name + Target + Equipment
-        const textToEmbed = `${ex.name} for ${ex.target} using ${ex.equipment}`;
-        const result = await model.embedContent(textToEmbed);
-        const embedding = result.embedding.values;
+        console.log(`\n\n🎉 Seeding Complete! Success: ${successCount}, Failed: ${failCount}`);
 
-        // 3. Insert Embedding
-        // First delete existing to avoid duplicates in this simple seed script
-        await supabase.from('exercise_embeddings').delete().eq('exercise_id', ex.id);
-
-        const { error: embedError } = await supabase
-            .from('exercise_embeddings')
-            .insert({
-                exercise_id: ex.id,
-                embedding: embedding
-            });
-
-        if (embedError) {
-            console.error(`Error embedding ${ex.name}:`, embedError);
-        }
+    } catch (e) {
+        console.error("\n💥 Critical Seed Error:", e);
     }
-
-    console.log("✅ Seeding Complete!");
 }
 
 seed();

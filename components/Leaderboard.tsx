@@ -58,18 +58,18 @@ const Leaderboard: React.FC = () => {
         : users;
 
     return (
-        <div className="h-full bg-white dark:bg-gray-900 p-5 sm:p-4 flex flex-col transition-colors duration-300">
+        <div className="flex flex-col h-full bg-transparent">
             <div className="flex items-center justify-between mb-6">
-                <h2 className="text-3xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                    <Trophy size={32} className="sm:w-6 sm:h-6 text-yellow-500" /> Leaderboard
+                <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 pl-1">
+                    <Trophy size={14} className="text-yellow-500" /> Global Rankings
                 </h2>
-                <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                <div className="flex bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm rounded-full p-1 border border-gray-200 dark:border-gray-700">
                     {['global', 'leagues', 'friends'].map((tab) => (
                         <button
                             key={tab}
                             onClick={() => setActiveTab(tab as any)}
-                            className={`px-4 py-2 sm:px-3 sm:py-1 rounded-md text-sm font-medium transition-colors capitalize ${activeTab === tab
-                                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                            className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all capitalize ${activeTab === tab
+                                ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/30'
                                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                                 }`}
                         >
@@ -80,53 +80,46 @@ const Leaderboard: React.FC = () => {
             </div>
 
             {loading ? (
-                <div className="flex-1 flex items-center justify-center">
+                <div className="flex-1 flex items-center justify-center py-12">
                     <Loader2 className="animate-spin text-emerald-500" size={32} />
                 </div>
             ) : (
-                <div className="flex-1 overflow-y-auto space-y-3">
+                <div className="space-y-3">
                     {displayUsers.map((user, index) => (
                         <div
                             key={user.id}
-                            className={`flex items-center p-4 rounded-xl border transition-colors ${user.id === currentUser?.id
-                                ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500/30'
-                                : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+                            className={`relative flex items-center p-4 rounded-2xl transition-all hover:scale-[1.01] ${user.id === currentUser?.id
+                                ? 'bg-emerald-50/80 dark:bg-emerald-900/10 border border-emerald-500/30 shadow-emerald-500/10 shadow-lg'
+                                : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow-md'
                                 }`}
                         >
-                            <div className="w-8 font-bold text-gray-400 dark:text-gray-500 text-lg">#{index + 1}</div>
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm mr-4 uppercase">
-                                {user.username?.substring(0, 2) || 'U'}
+                            <div className={`w-8 font-black text-xl italic ${index < 3 ? 'text-yellow-500 drop-shadow-sm' : 'text-gray-300 dark:text-gray-600'
+                                }`}>#{index + 1}</div>
+
+                            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg mr-4 shadow-lg shadow-blue-500/20">
+                                {user.username?.substring(0, 1).toUpperCase() || 'U'}
                             </div>
-                            <div className="flex-1">
-                                <h3 className={`font-bold text-sm ${user.id === currentUser?.id ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-900 dark:text-white'}`}>
+
+                            <div className="flex-1 min-w-0 mr-4">
+                                <h3 className={`font-bold truncate ${user.id === currentUser?.id ? 'text-emerald-700 dark:text-emerald-400' : 'text-gray-900 dark:text-white'}`}>
                                     {user.username || 'Anonymous'} {user.id === currentUser?.id && '(You)'}
                                 </h3>
-                                <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                                    <Shield size={12} className="text-blue-500" /> {user.tier || 'Bronze'} League
+                                <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 font-medium">
+                                    <Shield size={10} className="text-blue-500 fill-blue-500" /> {user.tier || 'Bronze'} League
                                 </div>
                             </div>
 
-                            {user.id !== currentUser?.id && (
-                                <button
-                                    onClick={() => toggleFollow(user.id)}
-                                    className={`mr-3 px-3 py-1 rounded-full text-xs font-medium transition-colors ${followedIds.has(user.id)
-                                        ? 'bg-emerald-500 text-white border border-emerald-500'
-                                        : 'bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-emerald-500 hover:text-emerald-500'
-                                        }`}
-                                >
-                                    {followedIds.has(user.id) ? 'Following' : 'Follow'}
-                                </button>
-                            )}
-
                             <div className="text-right">
-                                <div className="text-xl font-bold text-gray-900 dark:text-white">{user.total_reps}</div>
-                                <div className="text-[10px] text-gray-500 uppercase tracking-wide">Reps</div>
+                                <div className="text-xl font-black text-gray-900 dark:text-white tracking-tight">{user.total_reps.toLocaleString()}</div>
+                                <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total Reps</div>
                             </div>
                         </div>
                     ))}
                     {displayUsers.length === 0 && (
-                        <div className="text-center p-8 text-gray-500 dark:text-gray-400">
-                            {activeTab === 'friends' ? "You're not following anyone yet. Follow users to see them here!" : "No active users found. Be the first!"}
+                        <div className="text-center p-12 bg-white dark:bg-gray-800 rounded-3xl border border-dashed border-gray-300 dark:border-gray-700">
+                            <p className="text-gray-500 dark:text-gray-400 font-medium">
+                                {activeTab === 'friends' ? "You're not following anyone yet." : "No active users found."}
+                            </p>
                         </div>
                     )}
                 </div>

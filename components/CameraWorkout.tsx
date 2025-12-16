@@ -1,21 +1,26 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { geminiService } from '../services/geminiService';
-import { KeyManager } from '../services/keyManager'; // [NEW] Safe Mode Support
+import { KeyManager } from '../services/keyManager';
+import { visionService } from '../services/VisionService'; // [NEW]
+import { VelocityCalculator, detectWeight } from '../utils/analyticsLogic'; // [NEW]
+import { VisionData } from '../types/vision'; // [NEW]
+import VisionOverlay from './VisionOverlay'; // [NEW]
 import { useAudio } from '../hooks/useAudio';
 import { LiveConnectionState, WorkoutSession } from '../types';
 import { MODEL_NAMES, SYSTEM_INSTRUCTIONS } from '../constants';
 import { Modality, LiveServerMessage, FunctionDeclaration, Type } from '@google/genai';
 import { EXERCISE_CATALOG, detectExercise } from '../utils/exerciseLogic';
-import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings, Scan, EyeOff, Coffee, MessageSquare, Palette, Sparkles } from 'lucide-react';
+import { Camera, Mic, Square, Play, Save, CheckCircle, RefreshCw, Activity, Terminal, Settings, Scan, EyeOff, Coffee, MessageSquare, Palette, Sparkles, Zap, Ruler } from 'lucide-react'; // Added Zap, Ruler
 import { useToast } from './Toast';
 import '../styles/workout-skins.css';
 import SkinSelector from './workout/SkinSelector';
 
-// Declare global Pose for CDN loaded script
+// Declare global Pose for CDN loaded script (Keeping for fallback if completely borked, but mostly unused now)
 declare global {
   interface Window {
     Pose: any;
     Camera: any;
+    POSE_CONNECTIONS: any;
   }
 }
 
@@ -132,9 +137,22 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const [selectedCamera, setSelectedCamera] = useState<string>('');
   const [selectedMic, setSelectedMic] = useState<string>('');
   const [currentSkin, setCurrentSkin] = useState('default');
-  const [isPartyMode, setIsPartyMode] = useState(false); // [NEW] Toggle for fun skins
+  const [showSkins, setShowSkins] = useState(false); // [NEW] User toggle for skins UI
   const [showCelebrate, setShowCelebrate] = useState(false);
   const [sensitivity, setSensitivity] = useState(0); // -20 to +20 degrees
+
+  // [NEW] Exercise Locking State
+  const [isExerciseLocked, setIsExerciseLocked] = useState(false); // Default false (Auto-detect enabled initially?)
+
+  // [NEW] Vision & Analytics State
+  const [visionData, setVisionData] = useState<VisionData | null>(null);
+  const [showVelocity, setShowVelocity] = useState(false); // Velocity Toggle
+  const [isCalibrated, setIsCalibrated] = useState(false); // Shoulder width calibration
+  const [calibrationProgress, setCalibrationProgress] = useState(0);
+
+  // Analytics Refs
+  const velocityCalcRef = useRef(new VelocityCalculator());
+  const lastMetricsRef = useRef<{ velocity: number, power: number }>({ velocity: 0, power: 0 });
 
   // Countdown State
   const [isCountingDown, setIsCountingDown] = useState(false);
@@ -159,9 +177,13 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     currentRepScore: 0
   });
   const sensitivityRef = useRef(sensitivity);
-  // [NEW] Tracking Ref for Loop
   const isTrackingActiveRef = useRef(isTrackingActive);
   const sessionHistoryRef = useRef<{ time: string, type: 'rep' | 'warning', detail: string }[]>([]);
+
+  // [NEW] Stability & Debouncing Refs
+  const detectionBufferRef = useRef<string[]>([]);
+  const DETECTION_BUFFER_SIZE = 15; // Require ~0.5s of consistent detection (at 30fps)
+  const lastVisibilityCheckRef = useRef<boolean>(true);
 
   // [NEW] Circuit Breaker Refs
   const sessionStartTimeRef = useRef<number | null>(null);
@@ -218,6 +240,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
     setCountdown(3);
     setIsCountingDown(true);
     setIsTrackingActive(false);
+    setIsExerciseLocked(true); // [NEW] Lock exercise when starting
     setFeedback('Get ready...');
   };
 
@@ -285,240 +308,306 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   useEffect(() => { activeSessionPromiseRef.current = activeSessionPromise; }, [activeSessionPromise]);
   useEffect(() => { playDingRef.current = playDing; }, [playDing]);
 
-  // Initialize camera & MediaPipe
+
+  // Initialize Vision Service & Start Loop
   useEffect(() => {
-    let pose: any;
     let animationFrameId: number;
-    let currentStream: MediaStream | null = null;
     let isActive = true;
 
-    const onResults = (results: any) => {
-      if (!results.poseLandmarks) return;
-
-      if (results.poseLandmarks) {
-        // Draw on canvas
-        if (canvasRef.current && videoRef.current) {
-          const ctx = canvasRef.current.getContext('2d');
-          if (ctx) {
-            canvasRef.current.width = videoRef.current.videoWidth;
-            canvasRef.current.height = videoRef.current.videoHeight;
-            ctx.save();
-            ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-            // Optional: Draw video frame on canvas (not needed if video is behind)
-            // ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
-
-            const drawingUtils = (window as any).drawConnectors ? window : (window as any);
-            if (drawingUtils.drawConnectors && drawingUtils.drawLandmarks) {
-              const connections = (window as any).POSE_CONNECTIONS || [];
-              const bodyConnections = connections.filter((conn: [number, number]) => conn[0] > 10 && conn[1] > 10);
-              const bodyLandmarks = results.poseLandmarks.filter((_: any, index: number) => index > 10);
-
-              drawingUtils.drawConnectors(ctx, results.poseLandmarks, bodyConnections, { color: '#00FF00', lineWidth: 4 });
-              drawingUtils.drawLandmarks(ctx, bodyLandmarks, { color: '#FF0000', lineWidth: 2 });
-            }
-            ctx.restore();
-          }
-        }
-      }
-
-      // EXERCISE LOGIC ENGINE
-      // Read from REFS to avoid stale closures
-      const currentExercise = exerciseRef.current;
-      let config = EXERCISE_CATALOG[currentExercise];
-
-      // AUTO-DETECT: Try to identify the exercise from pose data
-      const detectedExercise = detectExercise(results.poseLandmarks);
-      if (detectedExercise && detectedExercise !== currentExercise) {
-        // Update exercise ONLY if detection is different and we have a valid config
-        // This automatically switches when user changes movement
-        setExercise(detectedExercise);
-        config = EXERCISE_CATALOG[detectedExercise];
-        addLog(`Auto-detected: ${detectedExercise}`);
-      }
-
-      // If still no config after auto-detect, skip counting
-      if (!config) {
-        return;
-      }
-
-      // ONLY COUNT REPS IF TRACKING IS ACTIVE (after countdown)
-      if (config && isTrackingActiveRef.current) {
-        const progress = config.calculateProgress(results.poseLandmarks);
-        const state = exerciseStateRef.current;
-
-        // State Machine: START -> MIDDLE -> END (Rep Complete)
-        const sens = sensitivityRef.current;
-        if (state.stage === 'start') {
-          if (progress <= config.thresholds.middle + sens) {
-            state.stage = 'middle';
-            state.repStartTime = Date.now(); // Start timing the concentric phase (or full rep)
-
-            // Calculate Score at the bottom of the rep (max exertion)
-            if (config.calculateScore) {
-              state.currentRepScore = config.calculateScore(results.poseLandmarks);
-            } else {
-              state.currentRepScore = 100; // Default
-            }
-          }
-
-          // Check Form (Throttled)
-          if (config.checkForm && Date.now() - state.lastFeedback > 5000) {
-            const warning = config.checkForm(results.poseLandmarks);
-            if (warning) {
-              state.lastFeedback = Date.now();
-              setFeedback(warning);
-              sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'warning', detail: warning });
-
-              // Notify Gemini to speak
-              if (isConnectedRef.current && activeSessionPromiseRef.current) {
-                activeSessionPromiseRef.current.then(session => {
-                  session.send({ parts: [{ text: `Form Warning: ${warning}. Tell the user to fix it.` }] });
-                });
-              }
-            }
-          }
-        } else if (state.stage === 'middle') {
-          if (progress >= config.thresholds.end) {
-            state.stage = 'start';
-            // REP COMPLETE
-            const newReps = repsRef.current + 1;
-            setReps(newReps);
-            setLastRepScore(state.currentRepScore);
-            lastRepTimeRef.current = Date.now(); // [NEW] Reset Circuit Breaker Timer
-
-            // [SKIN EFFECT] Trigger celebration on rep complete (every 5 reps or high score)
-            if (results.poseLandmarks && Math.random() > 0.95) {
-              setShowCelebrate(true);
-              setTimeout(() => setShowCelebrate(false), 1000);
-            }
-
-            // Calculate Duration & Motivation
-            const duration = (Date.now() - state.repStartTime) / 1000;
-            state.repDurations.push(duration);
-            const avgDuration = state.repDurations.length > 1
-              ? state.repDurations.reduce((a, b) => a + b, 0) / state.repDurations.length
-              : duration;
-
-            // [NEW] Update tempo tracking UI
-            setLastRepDuration(duration);
-            setAvgRepDuration(avgDuration);
-
-            sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'rep', detail: `Rep ${newReps} in ${duration.toFixed(1)}s (Score: ${state.currentRepScore})` });
-
-            // Trigger Sound Effect using REF
-            if (playDingRef.current) playDingRef.current();
-
-            // Notify Gemini
-            if (isConnectedRef.current && activeSessionPromiseRef.current) {
-              activeSessionPromiseRef.current.then(session => {
-                // Check for struggle (1.5x slower than average)
-                if (state.repDurations.length > 3 && duration > avgDuration * 1.5) {
-                  session.send({ parts: [{ text: `User is struggling (Rep took ${duration.toFixed(1)}s vs avg ${avgDuration.toFixed(1)}s). Give high-energy motivation!` }] });
-                }
-
-                session.sendToolResponse({
-                  functionResponses: [{
-                    name: 'updateWorkoutStats',
-                    response: { result: `Rep ${newReps} completed. Form Score: ${state.currentRepScore}/100.` }
-                  }]
-                });
-              }).catch(() => {
-                // Ignore errors if no tool call was pending
-              });
-            }
-          }
-        }
-      }
-    };
-
-    const startCamera = async () => {
+    const startVision = async () => {
       try {
+        // Initialize Models (Lazy load object detection if Pro/Velocity enabled - Logic in Loop)
+        // Actually, we should initialize mainly here.
+        await visionService.initialize(showVelocity); // Pass showVelocity hint? Or just init Pose first.
+        // Let's init basic first.
+        // Note: initialize is idempotent.
+
+        // Setup Camera
         const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
         const videoWidth = isMobile ? 480 : 640;
         const videoHeight = isMobile ? 360 : 480;
 
-        const videoConstraints = {
-          width: videoWidth,
-          height: videoHeight,
-          deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
-          facingMode: isMobile ? 'user' : undefined
-        };
+        const ms = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: videoWidth,
+            height: videoHeight,
+            deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
+            facingMode: isMobile ? 'user' : undefined
+          },
+          audio: selectedMic ? { deviceId: { exact: selectedMic } } : false
+        });
 
-        let ms: MediaStream;
-        try {
-          // Try to get both video and audio
-          ms = await navigator.mediaDevices.getUserMedia({
-            video: videoConstraints,
-            audio: selectedMic ? { deviceId: { exact: selectedMic } } : true
-          });
-        } catch (e) {
-          console.warn("Full media access failed, trying video only", e);
-          // Fallback: Video only (muted)
-          ms = await navigator.mediaDevices.getUserMedia({
-            video: videoConstraints,
-            audio: false
-          });
-          addLog("Microphone access denied. Switched to Vision Only.");
-          setFeedback("Microphone blocked. Vision running.");
-        }
-
-        currentStream = ms;
         setStream(ms);
-
         if (videoRef.current) {
           videoRef.current.srcObject = ms;
-          // Wait for metadata to play
           videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play().catch(e => console.error("Play error", e));
-            detectPose(); // Start loop once video is ready
+            videoRef.current?.play();
+            // Start Loop
+            requestVideoFrameCallbackLoop();
           };
         }
-        addLog(`Camera initialized (${videoWidth}x${videoHeight})`);
+        addLog("Vision System Active");
 
-        if ((window as any).Pose) {
-          pose = new (window as any).Pose({
-            locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-          });
-          pose.setOptions({
-            modelComplexity: isMobile ? 0 : 1,
-            smoothLandmarks: true,
-            enableSegmentation: false,
-            minDetectionConfidence: isMobile ? 0.6 : 0.5,
-            minTrackingConfidence: isMobile ? 0.6 : 0.5
-          });
-          pose.onResults(onResults);
-        }
       } catch (e) {
-        console.error("Camera error:", e);
-        setFeedback("Camera permission denied.");
-        addLog("Camera error");
+        console.error("Vision Init Error", e);
+        setFeedback("Camera/Vision Error");
       }
     };
 
-    // Explicit Loop
-    const detectPose = async () => {
-      if (!isActive || !videoRef.current || !pose) return;
+    const requestVideoFrameCallbackLoop = () => {
+      if (!isActive || !videoRef.current) return;
 
-      try {
-        if (videoRef.current.readyState >= 2) { // 2 = HAVE_CURRENT_DATA
-          await pose.send({ image: videoRef.current });
+      // Use requestVideoFrameCallback if available for efficiency, else rAF
+      if ('requestVideoFrameCallback' in videoRef.current) {
+        videoRef.current.requestVideoFrameCallback((now, metadata) => {
+          processFrame(now);
+          requestVideoFrameCallbackLoop(); // Recurse
+        });
+      } else {
+        requestAnimationFrame((now) => {
+          processFrame(now);
+          requestVideoFrameCallbackLoop();
+        });
+      }
+    };
+
+    const processFrame = async (timestamp: number) => {
+      if (!videoRef.current) return;
+
+      // 1. Run Vision Service
+      // Only run Object Detection if showVelocity is ON (Performance/Battery Save)
+      const data = await visionService.detect(videoRef.current, timestamp, showVelocity); // showVelocity passed as 'useObjectDetection'
+
+      // 2. Run Analytics (Velocity)
+      let velocityMetrics = undefined;
+      if (showVelocity && data.objects.length > 0) {
+        // Track the first object (simplified) or biggest object
+        const obj = data.objects[0];
+        const cx = obj.bbox[0] + obj.bbox[2] / 2;
+        const cy = obj.bbox[1] + obj.bbox[3] / 2;
+        velocityMetrics = velocityCalcRef.current.calculate({ x: cx, y: cy }, timestamp);
+
+        // Hype Protocol: Check for explosiveness to feed LLM
+        if (velocityMetrics.isExplosive) {
+          // We can queue this for the LLM
+          // Store in ref to send nicely
+          lastMetricsRef.current.velocity = velocityMetrics.velocity;
         }
-      } catch (err) {
-        // console.error(err); // Suppress frequent errors
+
+        // Weight Power Calc (Mass * Gravity * Velocity)
+        // Assuming 'weight' state is in LBS, convert to KG -> Mass
+        const massKg = weight * 0.453592;
+        if (massKg > 0) {
+          velocityMetrics.powerWatts = massKg * 9.81 * velocityMetrics.velocity;
+          lastMetricsRef.current.power = velocityMetrics.powerWatts;
+        }
+      } else {
+        velocityCalcRef.current.reset();
       }
 
-      animationFrameId = requestAnimationFrame(detectPose);
+      // Attach analytics to data
+      data.velocity = velocityMetrics;
+      setVisionData(data); // Trigger UI Render (Overlay)
+
+      // 3. Pose-based Logic (Exercise Counting)
+      if (data.pose && data.pose.landmarks && data.pose.landmarks.length > 0) {
+        const landmarks = data.pose.landmarks[0]; // MediaPipe format is different? 
+        // Our 'detect' returns raw result. 
+        // Adapter: exerciseLogic expects array of {x, y, z, visibility}
+        // MediaPipe returns {x, y, z, visibility} normalized.
+        // Check formatting.
+
+        // SMART CALIBRATION
+        if (!isCalibrated && landmarks[11] && landmarks[12]) {
+          // Measure shoulder width
+          const dx = landmarks[11].x - landmarks[12].x;
+          const dy = landmarks[11].y - landmarks[12].y; // Should be near 0 if standing
+          const widthRaw = Math.sqrt(dx * dx + dy * dy);
+
+          // Heuristic: Avg shoulder width = 0.4m
+          // Scale = 0.4 / widthRaw (meters per normalized unit)
+          // But velocity calc uses PIXELS.
+          // widthPx = widthRaw * videoWidth.
+          // Scale (m/px) = 0.4 / (widthRaw * videoRef.current.videoWidth).
+
+          if (widthRaw > 0.1) { // Ensure they are in frame
+            const widthPx = widthRaw * videoRef.current.videoWidth;
+            const scale = 0.4 / widthPx;
+            velocityCalcRef.current.setScale(scale);
+            setIsCalibrated(true);
+            showToast("Calibrated to your body!", "success");
+          }
+        }
+
+        // WEIGHT DETECTION (Heuristic)
+        // If we haven't manually set weight, try to detect
+        if (weight === 0 && data.objects.length > 0) {
+          const { isWeighted } = detectWeight(data.objects, landmarks[15], landmarks[16], videoRef.current.videoWidth, videoRef.current.videoHeight);
+          if (isWeighted) {
+            // Auto-suggest? Or just set flag?
+            // For now, let's just log it or maybe auto-set a placeholder
+            // setWeight(20); // Example
+          }
+        }
+
+        //      // EXERCISE LOGIC ENGINE
+        // Read from REFS to avoid stale closures
+        const currentExercise = exerciseRef.current;
+        let config = EXERCISE_CATALOG[currentExercise];
+
+        // AUTO-DETECT STABILITY LOGIC
+        // 1. Buffer the raw detection
+        const rawDetection = detectExercise(landmarks); // Assuming landmarks is the correct input for detectExercise
+        if (rawDetection) {
+          detectionBufferRef.current.push(rawDetection);
+          if (detectionBufferRef.current.length > DETECTION_BUFFER_SIZE) {
+            detectionBufferRef.current.shift();
+          }
+        }
+
+        // 2. Check for stability (Majority Vote)
+        // Only switch if > 80% of buffer matches the new exercise
+        if (detectionBufferRef.current.length >= DETECTION_BUFFER_SIZE) {
+          const counts: Record<string, number> = {};
+          let maxCount = 0;
+          let majorityExercise = null;
+
+          detectionBufferRef.current.forEach(ex => {
+            counts[ex] = (counts[ex] || 0) + 1;
+            if (counts[ex] > maxCount) {
+              maxCount = counts[ex];
+              majorityExercise = ex;
+            }
+          });
+
+          const stabilityRatio = maxCount / DETECTION_BUFFER_SIZE;
+
+          // SWITCH EXERCISE (Only if NOT Locked)
+          // If locked, we ignore auto-detect switches
+          if (!isExerciseLocked && majorityExercise && majorityExercise !== currentExercise && stabilityRatio > 0.8) {
+            setExercise(majorityExercise);
+            // Clear buffer to prevent rapid switching back
+            detectionBufferRef.current = [];
+            config = EXERCISE_CATALOG[majorityExercise];
+            addLog(`Switched to: ${majorityExercise} (Stable)`);
+            playDingRef.current(); // Audio cue for switch
+          }
+        }
+
+        // If still no config after auto-detect/manual set, skip counting
+        if (!config) {
+          return;
+        }
+
+        // VISIBILITY CHECK (The "Too Close" Guard)
+        // For leg exercises (Squats, Lunges, Jumping Jacks), we need to see feet/ankles (Index 27, 28)
+        // If visibility is low, PAUSE tracking and warn user.
+        const isLegExercise = ['Squats', 'Lunges', 'Jumping Jacks'].includes(config.name);
+        if (isLegExercise) {
+          const leftAnkle = landmarks[27];
+          const rightAnkle = landmarks[28];
+          // Visibility < 0.5 means likely off-screen or occluded
+          const feetVisible = (leftAnkle && leftAnkle.visibility > 0.5) || (rightAnkle && rightAnkle.visibility > 0.5);
+
+          if (!feetVisible) {
+            if (lastVisibilityCheckRef.current) { // Only set feedback once
+              lastVisibilityCheckRef.current = false;
+              setFeedback("Back up! I can't see your feet.");
+            }
+            return; // EXIT LOOP - DO NOT COUNT REPS
+          } else {
+            if (!lastVisibilityCheckRef.current) { // Clear feedback once visible again
+              lastVisibilityCheckRef.current = true;
+              setFeedback(""); // Clear warning
+            }
+          }
+        }
+
+        // ONLY COUNT REPS IF TRACKING IS ACTIVE (after countdown)
+        if (config && isTrackingActiveRef.current) {
+          const progress = config.calculateProgress(landmarks);
+          const state = exerciseStateRef.current;
+          const sens = sensitivityRef.current;
+
+          if (state.stage === 'start') {
+            if (progress <= config.thresholds.middle + sens) {
+              state.stage = 'middle';
+              state.repStartTime = Date.now();
+              state.currentRepScore = config.calculateScore ? config.calculateScore(landmarks) : 100;
+            }
+            // Form Check (Throttled)
+            if (config.checkForm && Date.now() - state.lastFeedback > 5000) {
+              const warning = config.checkForm(landmarks);
+              if (warning) {
+                state.lastFeedback = Date.now();
+                setFeedback(warning);
+                sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'warning', detail: warning });
+                // Notify Gemini
+                if (isConnectedRef.current && activeSessionPromiseRef.current) {
+                  activeSessionPromiseRef.current.then(session => {
+                    session.send({ parts: [{ text: `Form Warning: ${warning}.` }] });
+                  });
+                }
+              }
+            }
+          } else if (state.stage === 'middle') {
+            if (progress >= config.thresholds.end) {
+              state.stage = 'start';
+              const newReps = repsRef.current + 1;
+              setReps(newReps);
+              setLastRepScore(state.currentRepScore);
+              lastRepTimeRef.current = Date.now();
+
+              // Celebration
+              if (Math.random() > 0.9) {
+                setShowCelebrate(true);
+                setTimeout(() => setShowCelebrate(false), 1000);
+              }
+
+              const duration = (Date.now() - state.repStartTime) / 1000;
+              state.repDurations.push(duration);
+              const avgDuration = state.repDurations.length > 1
+                ? state.repDurations.reduce((a, b) => a + b, 0) / state.repDurations.length : duration;
+
+              setLastRepDuration(duration);
+              setAvgRepDuration(avgDuration);
+
+              sessionHistoryRef.current.push({ time: new Date().toLocaleTimeString(), type: 'rep', detail: `Rep ${newReps} (${duration.toFixed(1)}s)` });
+              if (playDingRef.current) playDingRef.current();
+
+              // Notify Gemini (Context Injection)
+              if (isConnectedRef.current && activeSessionPromiseRef.current) {
+                activeSessionPromiseRef.current.then(session => {
+                  // Inject Velocity/Power Context
+                  let extraContext = '';
+                  if (lastMetricsRef.current.power > 300) extraContext += ` POWER: ${lastMetricsRef.current.power.toFixed(0)}W!`;
+                  if (lastMetricsRef.current.velocity > 1.2) extraContext += ` VELOCITY: ${lastMetricsRef.current.velocity.toFixed(2)}m/s! EXPLOSIVE!`;
+
+                  session.sendToolResponse({
+                    functionResponses: [{
+                      name: 'updateWorkoutStats',
+                      response: { result: `Rep ${newReps} done. Score: ${state.currentRepScore}.${extraContext}` }
+                    }]
+                  });
+                });
+              }
+            }
+          }
+        }
+      }
     };
 
-    startCamera();
+    startVision();
 
     return () => {
       isActive = false;
-      if (currentStream) currentStream.getTracks().forEach(t => t.stop());
-      if (pose) pose.close();
-      cancelAnimationFrame(animationFrameId);
+      if (videoRef.current) {
+        // Stop stream
+        const stream = videoRef.current.srcObject as MediaStream;
+        if (stream) stream.getTracks().forEach(t => t.stop());
+      }
     };
-  }, [selectedCamera, selectedMic]); // Stable dependencies ONLY
+  }, [selectedCamera, selectedMic]); // Re-init if devices change
 
   // Connect to Live API
   const toggleLiveSession = async () => {
@@ -768,20 +857,20 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   // Determine content to render for the camera view (Video + Overlays)
   const cameraLayer = (
     <div className={`overflow-hidden bg-black transition-all duration-500 ${focusMode ? 'fixed inset-0 z-50 w-full h-full rounded-none m-0' : 'relative flex-1 rounded-xl m-2 border border-gray-700'}`}>
-      {/* Party Mode Toggle (Top Right) */}
+      {/* Party Mode Toggle (Top Right) -> SKINS TOGGLE */}
       {!focusMode && (
         <button
-          onClick={() => setIsPartyMode(!isPartyMode)}
-          className={`absolute top-4 right-4 z-20 p-2 rounded-full backdrop-blur-md transition-all ${isPartyMode ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50' : 'bg-black/40 text-white/50 hover:bg-black/60 hover:text-white'
+          onClick={() => setShowSkins(!showSkins)}
+          className={`absolute top-4 right-4 z-20 p-2 rounded-full backdrop-blur-md transition-all ${showSkins ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50' : 'bg-black/40 text-white/50 hover:bg-black/60 hover:text-white'
             }`}
-          title="Toggle Party Mode"
+          title="Toggle Skins"
         >
-          {isPartyMode ? <Sparkles size={20} className="animate-pulse" /> : <Palette size={20} />}
+          <Palette size={20} />
         </button>
       )}
 
       {/* Main Camera View */}
-      <div className={`relative w-full h-full aspect-video bg-black overflow-hidden group ${isPartyMode && currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
+      <div className={`relative w-full h-full aspect-video bg-black overflow-hidden group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
         <video
           ref={videoRef}
           className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
@@ -789,18 +878,44 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
           muted
           autoPlay
         />
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
-        />
+        {/* REPLACED Old Canvas with VisionOverlay */}
+        {visionData && (
+          <VisionOverlay
+            data={visionData}
+            width={videoRef.current?.videoWidth || 640} // Default fallback
+            height={videoRef.current?.videoHeight || 480}
+            showVelocity={showVelocity}
+            isMirrored={true}
+          />
+        )}
+
+        {/* [NEW] Velocity Toggle Button */}
+        <button
+          onClick={() => {
+            const newState = !showVelocity;
+            setShowVelocity(newState);
+            // Trigger Lazy Load of TFJS if needed
+            if (newState) visionService.initialize(true);
+          }}
+          className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
+        >
+          <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
+        </button>
+
+        {/* [NEW] Calibration Indicator */}
+        {isCalibrated && showVelocity && (
+          <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
+            <Ruler size={12} /> CALIBRATED
+          </div>
+        )}
 
         {/* Skin Celebration Effect */}
-        {isPartyMode && showCelebrate && <div className="celebration-burst" />}
+        {showCelebrate && <div className="celebration-burst" />}
       </div>
 
-      {/* Party Mode Skin Selector (Bottom Center) */}
+      {/* Skin Selector (Bottom Center) - Controlled by showSkins */}
       {
-        isPartyMode && !focusMode && (
+        showSkins && !focusMode && (
           <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-20 pointer-events-auto animate-in slide-in-from-bottom-4 fade-in duration-300">
             <SkinSelector currentSkin={currentSkin} onSelectSkin={setCurrentSkin} />
           </div>
@@ -1065,14 +1180,31 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             <div className="relative">
               <select
                 value={exercise}
-                onChange={(e) => setExercise(e.target.value)}
-                className="w-full bg-black/40 text-white rounded-xl p-4 pr-10 text-lg font-medium appearance-none border border-gray-700 focus:border-emerald-500 focus:outline-none transition-all"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setExercise(val);
+                  if (val === 'Auto-Detect') {
+                    setIsExerciseLocked(false);
+                    setExercise('Squats'); // Default fallback? Or keep 'Auto-Detect' as a special value?
+                    // If 'Auto-Detect' is a value in the dropdown, we need to handle it.
+                    // The currentExercise cannot be 'Auto-Detect' because EXERCISE_CATALOG['Auto-Detect'] doesn't exist.
+                    // So we unlock, but maybe just reset buffer?
+                  } else {
+                    setIsExerciseLocked(true);
+                  }
+                }}
+                className={`w-full bg-black/40 text-white rounded-xl p-4 pr-10 text-lg font-medium appearance-none border transition-all ${isExerciseLocked ? 'border-emerald-500/50 ring-1 ring-emerald-500/20' : 'border-gray-700 focus:border-emerald-500'}`}
               >
-                <option>Auto-Detect</option>
+                <option value="Auto-Detect">Auto-Detect (Unlock)</option>
                 {Object.keys(EXERCISE_CATALOG).filter(k => k !== 'default').map(ex => (
-                  <option key={ex} value={ex}>{ex}</option>
+                  <option key={ex} value={ex}>{ex} {isExerciseLocked && exercise === ex ? '(Locked)' : ''}</option>
                 ))}
               </select>
+              {isExerciseLocked && (
+                <div className="absolute right-10 top-1/2 transform -translate-y-1/2 pointer-events-none text-emerald-500">
+                  <CheckCircle size={16} />
+                </div>
+              )}
             </div>
             {feedback && (
               <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3 animate-pulse mt-2">

@@ -222,43 +222,50 @@ const FriendsList: React.FC = () => {
                 </div>
             )}
 
+
             {/* Friends List */}
-            <div className="space-y-2">
-                <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                    <Users size={16} /> Friends ({friends.length})
+            <div className="space-y-3">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 pl-1 mb-3">
+                    <Users size={14} /> My Friends ({friends.length})
                 </h4>
 
                 {friends.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                        <Users size={40} className="mx-auto mb-2 opacity-50" />
-                        <p className="text-sm">No friends yet. Search for users above!</p>
+                    <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 text-center shadow-sm border border-gray-100 dark:border-gray-700">
+                        <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Users size={32} className="text-gray-400" />
+                        </div>
+                        <h3 className="text-gray-900 dark:text-white font-bold mb-1">Build Your Tribe</h3>
+                        <p className="text-sm text-gray-500 mb-4">Training is better together. Find friends to compete with!</p>
+                        <button onClick={() => document.querySelector('input')?.focus()} className="text-emerald-500 font-bold text-sm hover:underline">Search for people</button>
                     </div>
                 ) : (
                     friends.map(friendship => (
-                        <div key={friendship.id} className="flex items-center justify-between bg-gray-50 dark:bg-gray-800 rounded-xl p-4">
-                            <div className="flex items-center gap-3">
-                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-white font-bold text-lg">
+                        <div key={friendship.id} className="relative group bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm border border-gray-100 dark:border-gray-700 transition-all hover:shadow-md flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-emerald-500/10">
                                     {friendship.friend?.username?.[0]?.toUpperCase() || '?'}
                                 </div>
                                 <div>
-                                    <p className="font-medium text-gray-900 dark:text-white">{friendship.friend?.username}</p>
-                                    <p className="text-xs text-gray-500">
-                                        {friendship.friend?.total_workouts || 0} workouts · {friendship.friend?.tier || 'Bronze'}
-                                    </p>
+                                    <p className="font-bold text-gray-900 dark:text-white text-lg">{friendship.friend?.username}</p>
+                                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                                        <span className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300 font-medium">{friendship.friend?.tier || 'Bronze'}</span>
+                                        <span>•</span>
+                                        <span>{friendship.friend?.total_workouts || 0} Workouts</span>
+                                    </div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 {friendship.friend?.privacy_level === 'public' && (
-                                    <span className="text-xs text-emerald-500 flex items-center gap-1">
-                                        <Shield size={12} /> Public
+                                    <span className="text-xs text-emerald-500 flex items-center gap-1 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1 rounded-full font-medium">
+                                        <Shield size={10} /> Public
                                     </span>
                                 )}
                                 <button
                                     onClick={() => removeFriend(friendship.id)}
-                                    className="text-gray-400 hover:text-red-500 p-2 transition-colors"
+                                    className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-50 dark:bg-gray-700 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all opacity-0 group-hover:opacity-100"
                                     title="Remove friend"
                                 >
-                                    <UserMinus size={18} />
+                                    <UserMinus size={16} />
                                 </button>
                             </div>
                         </div>

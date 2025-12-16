@@ -167,23 +167,24 @@ const ActivityFeed: React.FC = () => {
     return (
         <div className="space-y-4">
             {activities.map(activity => (
-                <div key={activity.id} className="flex gap-3 items-start">
+                <div key={activity.id} className="bg-white dark:bg-gray-800/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-gray-100 dark:border-gray-700/50 flex gap-4 items-start transition-all hover:shadow-md hover:scale-[1.01]">
                     {/* Avatar */}
-                    <div className="relative">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-white font-bold">
+                    <div className="relative shrink-0">
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-emerald-500/20">
                             {activity.profile?.username?.[0]?.toUpperCase() || '?'}
                         </div>
-                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 ${getActivityColor(activity.activity_type)} rounded-full flex items-center justify-center text-white`}>
+                        <div className={`absolute -bottom-1 -right-1 w-6 h-6 ${getActivityColor(activity.activity_type)} rounded-full flex items-center justify-center text-white border-2 border-white dark:border-gray-800 shadow-sm`}>
                             {getActivityIcon(activity.activity_type)}
                         </div>
                     </div>
 
                     {/* Content */}
-                    <div className="flex-1">
-                        <p className="text-sm text-gray-700 dark:text-gray-300">
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-800 dark:text-gray-200 leading-relaxed">
                             {formatActivityText(activity)}
                         </p>
-                        <p className="text-xs text-gray-400 mt-1">
+                        <p className="text-xs text-gray-400 mt-1.5 font-medium flex items-center gap-1">
+                            <Calendar size={10} />
                             {formatTime(activity.created_at)}
                         </p>
                     </div>
@@ -193,7 +194,7 @@ const ActivityFeed: React.FC = () => {
             {hasMore && (
                 <button
                     onClick={() => fetchActivities(true)}
-                    className="w-full py-3 text-center text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center justify-center gap-1"
+                    className="w-full py-4 rounded-xl bg-white dark:bg-gray-800 text-center text-sm font-bold text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center justify-center gap-1 transition-all shadow-sm"
                 >
                     <ChevronDown size={16} />
                     Load more

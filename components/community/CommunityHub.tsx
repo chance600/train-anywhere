@@ -21,27 +21,28 @@ const TribeHub: React.FC<TribeHubProps> = ({ onBack }) => {
         { key: 'leaderboard', label: 'Ranks', icon: <Award size={16} /> },
     ];
 
-    return (
-        <div className="min-h-screen bg-gray-100 dark:bg-gray-900">
-            {/* Header */}
-            <div className="bg-gradient-to-r from-purple-600 to-pink-600 pt-12 pb-6 px-4">
-                <div className="max-w-lg mx-auto">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div>
-                            <h1 className="text-2xl font-bold text-white">Community</h1>
-                            <p className="text-white/80 text-sm">Friends, challenges & leaderboards</p>
-                        </div>
-                    </div>
 
-                    {/* Tab Switcher */}
-                    <div className="flex gap-1 mt-4">
+    return (
+        <div className="min-h-screen bg-gray-50 dark:bg-black pb-20">
+            {/* Header */}
+            <div className="bg-gradient-to-br from-purple-700 via-pink-600 to-rose-500 pt-16 pb-12 px-6 rounded-b-[2.5rem] shadow-xl relative overflow-hidden">
+                {/* Abstract Shapes */}
+                <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-purple-900/20 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none"></div>
+
+                <div className="max-w-xl mx-auto relative z-10 text-center">
+                    <h1 className="text-4xl font-black text-white mb-2 tracking-tight">Community</h1>
+                    <p className="text-white/90 font-medium text-lg">Connect, Compete, Conquer.</p>
+
+                    {/* Floating Tab Switcher */}
+                    <div className="flex p-1.5 mt-8 bg-white/10 backdrop-blur-md border border-white/20 rounded-full max-w-sm mx-auto shadow-lg">
                         {tabs.map(({ key, label, icon }) => (
                             <button
                                 key={key}
                                 onClick={() => setActiveTab(key)}
-                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl font-medium text-xs transition-all ${activeTab === key
-                                    ? 'bg-white text-purple-600 shadow-lg'
-                                    : 'bg-white/20 text-white/80 hover:bg-white/30'
+                                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-full font-bold text-xs transition-all duration-300 ${activeTab === key
+                                    ? 'bg-white text-pink-600 shadow-md transform scale-105'
+                                    : 'text-white/70 hover:bg-white/10 hover:text-white'
                                     }`}
                             >
                                 {icon}
@@ -53,13 +54,29 @@ const TribeHub: React.FC<TribeHubProps> = ({ onBack }) => {
             </div>
 
             {/* Content */}
-            <div className="max-w-lg mx-auto px-4 py-6 -mt-2">
-                <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-lg">
-                    {activeTab === 'feed' && <ActivityFeed />}
-                    {activeTab === 'friends' && <FriendsList />}
-                    {activeTab === 'challenges' && <ChallengeList />}
-                    {activeTab === 'leaderboard' && <Leaderboard />}
-                </div>
+            <div className="max-w-xl mx-auto px-4 py-8 space-y-6">
+                {/* No white box wrapper anymore, allowing feed items to "breathe" */}
+
+                {activeTab === 'feed' && (
+                    <div className="animate-in slide-in-from-bottom-4 duration-500 fade-in">
+                        <ActivityFeed />
+                    </div>
+                )}
+                {activeTab === 'friends' && (
+                    <div className="animate-in slide-in-from-bottom-4 duration-500 fade-in">
+                        <FriendsList />
+                    </div>
+                )}
+                {activeTab === 'challenges' && (
+                    <div className="animate-in slide-in-from-bottom-4 duration-500 fade-in">
+                        <ChallengeList />
+                    </div>
+                )}
+                {activeTab === 'leaderboard' && (
+                    <div className="animate-in slide-in-from-bottom-4 duration-500 fade-in">
+                        <Leaderboard />
+                    </div>
+                )}
             </div>
         </div>
     );
