@@ -220,7 +220,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       interval = setInterval(() => {
         setCountdown(c => {
           if (c === 1) {
-            playDing(); // Final beep
+            playDingRef.current?.(); // Final beep
             setIsCountingDown(false);
             setIsTrackingActive(true);
             setFeedback('GO! Start your reps!');
@@ -230,13 +230,13 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             setTimeout(() => setCountdown(-1), 1000);
             return 0;
           }
-          playDing(); // Countdown beep
+          playDingRef.current?.(); // Countdown beep
           return c - 1;
         });
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [isCountingDown, countdown, playDing]);
+  }, [isCountingDown, countdown]);
 
   const startTracking = () => {
     setReps(0); // Reset reps
