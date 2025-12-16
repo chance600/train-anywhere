@@ -139,6 +139,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const [currentSkin, setCurrentSkin] = useState('default');
   const [showSkins, setShowSkins] = useState(false); // [NEW] User toggle for skins UI
   const [showCelebrate, setShowCelebrate] = useState(false);
+  const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9); // [NEW] Dynamic Aspect Ratio
   const [sensitivity, setSensitivity] = useState(0); // -20 to +20 degrees
 
   // [NEW] Exercise Locking State
@@ -342,9 +343,6 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         });
 
         setStream(ms);
-        const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9);
-
-        // ... (existing code)
 
         if (videoRef.current) {
           videoRef.current.srcObject = ms;

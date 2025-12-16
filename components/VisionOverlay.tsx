@@ -10,42 +10,6 @@ interface VisionOverlayProps {
     isMirrored?: boolean;
 }
 
-// --- Particle System ---
-class Particle {
-    x: number;
-    y: number;
-    vx: number;
-    vy: number;
-    life: number;
-    color: string;
-
-    constructor(x: number, y: number) {
-        this.x = x;
-        this.y = y;
-        const angle = Math.random() * Math.PI * 2;
-        const speed = Math.random() * 2 + 1;
-        this.vx = Math.cos(angle) * speed;
-        this.vy = Math.sin(angle) * speed;
-        this.life = 1.0;
-        this.color = `hsl(${Math.random() * 60 + 20}, 100%, 70%)`; // Gold/Fire colors
-    }
-
-    update() {
-        this.x += this.vx;
-        this.y += this.vy;
-        this.life -= 0.02; // Fade out
-    }
-
-    draw(ctx: CanvasRenderingContext2D) {
-        ctx.globalAlpha = this.life;
-        ctx.fillStyle = this.color;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1.0;
-    }
-}
-
 const VisionOverlay: React.FC<VisionOverlayProps> = ({
     data,
     width,
@@ -54,7 +18,6 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
     isMirrored = true
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const particlesRef = useRef<Particle[]>([]);
 
     useEffect(() => {
         const canvas = canvasRef.current;
