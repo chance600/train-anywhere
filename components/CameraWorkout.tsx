@@ -184,6 +184,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const detectionBufferRef = useRef<string[]>([]);
   const DETECTION_BUFFER_SIZE = 15; // Require ~0.5s of consistent detection (at 30fps)
   const lastVisibilityCheckRef = useRef<boolean>(true);
+  const isCalibratedRef = useRef(isCalibrated);
+  const isExerciseLockedRef = useRef(isExerciseLocked);
 
   // [NEW] Circuit Breaker Refs
   const sessionStartTimeRef = useRef<number | null>(null);
@@ -195,6 +197,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   useEffect(() => { feedbackRef.current = feedback; }, [feedback]);
   useEffect(() => { sensitivityRef.current = sensitivity; }, [sensitivity]);
   useEffect(() => { isTrackingActiveRef.current = isTrackingActive; }, [isTrackingActive]);
+  useEffect(() => { isCalibratedRef.current = isCalibrated; }, [isCalibrated]);
+  useEffect(() => { isExerciseLockedRef.current = isExerciseLocked; }, [isExerciseLocked]);
 
   // Rest Timer Effect
   useEffect(() => {
@@ -418,7 +422,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         // Check formatting.
 
         // SMART CALIBRATION
-        if (!isCalibrated && landmarks[11] && landmarks[12]) {
+        if (!isCalibratedRef.current && landmarks[11] && landmarks[12]) {
           // Measure shoulder width
           const dx = landmarks[11].x - landmarks[12].x;
           const dy = landmarks[11].y - landmarks[12].y; // Should be near 0 if standing
@@ -484,7 +488,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
 
           // SWITCH EXERCISE (Only if NOT Locked)
           // If locked, we ignore auto-detect switches
-          if (!isExerciseLocked && majorityExercise && majorityExercise !== currentExercise && stabilityRatio > 0.8) {
+          if (!isExerciseLockedRef.current && majorityExercise && majorityExercise !== currentExercise && stabilityRatio > 0.8) {
             setExercise(majorityExercise);
             // Clear buffer to prevent rapid switching back
             detectionBufferRef.current = [];
@@ -503,7 +507,9 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         // For leg exercises (Squats, Lunges, Jumping Jacks), we need to see feet/ankles (Index 27, 28)
         // If visibility is low, PAUSE tracking and warn user.
         const isLegExercise = ['Squats', 'Lunges', 'Jumping Jacks'].includes(config.name);
-        if (isLegExercise) {
+
+        // [MODIFIED] Only check visibility if we are actively tracking reps
+        if (isLegExercise && isTrackingActiveRef.current) {
           const leftAnkle = landmarks[27];
           const rightAnkle = landmarks[28];
           // Visibility < 0.5 means likely off-screen or occluded
