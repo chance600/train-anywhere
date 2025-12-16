@@ -29,8 +29,8 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
         ctx.clearRect(0, 0, width, height);
 
         // Coordinate Transformation Helper
-        // If mirrored, x' = width - x
-        const transformX = (x: number) => isMirrored ? width - (x * width) : x * width;
+        // logic is simpler now: CSS handles the flip
+        const transformX = (x: number) => x * width;
         const transformY = (y: number) => y * height;
 
         // 1. Draw Skeleton (Classic Debug Style)
@@ -61,10 +61,10 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
                 }
             });
 
-            // Draw Landmarks (Red Dots)
+            // Draw Landmarks (Red Dots) - SKIP FACE (0-10)
             ctx.fillStyle = '#FF0000'; // Classic Red
-            landmarks.forEach((p: any) => {
-                if (p.visibility && p.visibility > 0.5) {
+            landmarks.forEach((p: any, index: number) => {
+                if (index > 10 && p.visibility && p.visibility > 0.5) { // Skip face
                     ctx.beginPath();
                     ctx.arc(transformX(p.x), transformY(p.y), 4, 0, 2 * Math.PI);
                     ctx.fill();
