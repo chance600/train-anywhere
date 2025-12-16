@@ -34,7 +34,6 @@ const ChallengeList: React.FC = () => {
             .from('challenges')
             .select('*')
             .eq('is_public', true)
-            .gte('end_date', new Date().toISOString().split('T')[0])
             .order('start_date', { ascending: true });
 
         // Fetch my participations
