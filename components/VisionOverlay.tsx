@@ -70,12 +70,11 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
         const transformX = (x: number) => isMirrored ? width - (x * width) : x * width;
         const transformY = (y: number) => y * height;
 
-        // 1. Draw Skeleton (Cyber Style)
-        // Use Cyber Style but keep it aligned
+        // 1. Draw Skeleton (Classic Debug Style)
         if (data.pose && data.pose.landmarks && data.pose.landmarks[0]) {
             const landmarks = data.pose.landmarks[0];
 
-            // Draw Connections (Green Cyber Lines)
+            // Draw Connections (Green Lines)
             const connections = (window as any).POSE_CONNECTIONS || [
                 [11, 13], [13, 15], // Left Arm
                 [12, 14], [14, 16], // Right Arm
@@ -85,10 +84,8 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
                 [24, 26], [26, 28]  // Right Leg
             ];
 
-            ctx.strokeStyle = '#00ffcc';
+            ctx.strokeStyle = '#00FF00'; // Classic Green
             ctx.lineWidth = 2;
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#00ffcc';
 
             connections.forEach(([i, j]: [number, number]) => {
                 const p1 = landmarks[i];
@@ -100,41 +97,17 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
                     ctx.stroke();
                 }
             });
+
+            // Draw Landmarks (Red Dots)
+            ctx.fillStyle = '#FF0000'; // Classic Red
+            landmarks.forEach((p: any) => {
+                if (p.visibility && p.visibility > 0.5) {
+                    ctx.beginPath();
+                    ctx.arc(transformX(p.x), transformY(p.y), 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
         }
-
-        // 4. Draw Particles (Explosion Effect)
-        if (showVelocity && data.velocity && data.velocity.isExplosive) {
-            // Spawn new particles at object or center
-            // Use nose as source if no object, or first object center
-            let spawnX = width / 2;
-            let spawnY = height / 2;
-
-            if (data.objects.length > 0) {
-                const obj = data.objects[0];
-                let dx = obj.bbox[0];
-                if (isMirrored) dx = width - (obj.bbox[0] + obj.bbox[2]);
-                spawnX = dx + obj.bbox[2] / 2;
-                spawnY = obj.bbox[1] + obj.bbox[3] / 2;
-            } else if (data.pose && data.pose.landmarks && data.pose.landmarks[0]) {
-                // Use nose
-                spawnX = transformX(data.pose.landmarks[0][0].x);
-                spawnY = transformY(data.pose.landmarks[0][0].y);
-            }
-
-            // Spawn burst
-            for (let i = 0; i < 5; i++) {
-                particlesRef.current.push(new Particle(spawnX, spawnY));
-            }
-        }
-
-        // Update and Draw Particles
-        particlesRef.current.forEach((p, index) => {
-            p.update();
-            p.draw(ctx);
-            if (p.life <= 0) {
-                particlesRef.current.splice(index, 1);
-            }
-        });
 
         // 5. Draw Velocity Text (Floating HUD)
         if (showVelocity && data.velocity) {
