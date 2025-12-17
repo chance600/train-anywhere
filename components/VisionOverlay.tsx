@@ -97,11 +97,6 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
             }
         }
 
-        // DEBUG: Overlay Props
-        ctx.fillStyle = '#00FFFF'; // Cyan
-        ctx.font = '16px monospace';
-        ctx.fillText(`DEBUG: ${width}x${height} | Mirrored: ${isMirrored}`, 20, 100);
-
         ctx.restore();
 
     }, [data, width, height, showVelocity, isMirrored]);

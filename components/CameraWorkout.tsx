@@ -331,18 +331,21 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
 
         // Setup Camera
         const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
-        const videoWidth = isMobile ? 480 : 640;
-        const videoHeight = isMobile ? 360 : 480;
 
-        const ms = await navigator.mediaDevices.getUserMedia({
+        // Force HD (16:9) for better alignment with full-screen containers
+        // This prevents object-fit cropping mismatches
+        const constraints = {
           video: {
-            width: videoWidth,
-            height: videoHeight,
+            width: { ideal: isMobile ? 480 : 1280 },
+            height: { ideal: isMobile ? 360 : 720 },
+            aspectRatio: { ideal: 1.7777777778 }, // 16:9
             deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
             facingMode: isMobile ? 'user' : undefined
           },
           audio: selectedMic ? { deviceId: { exact: selectedMic } } : false
-        });
+        };
+
+        const ms = await navigator.mediaDevices.getUserMedia(constraints);
 
         setStream(ms);
 
