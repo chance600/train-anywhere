@@ -888,49 +888,66 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         </button>
       )}
 
-      {/* Main Camera View - Full Screen Immersive */}
-      {/* We use object-cover for BOTH video and overlay to ensure they crop identically */}
-      <div className={`relative w-full h-full bg-black overflow-hidden group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
-        <video
-          ref={videoRef}
-          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
-          playsInline
-          muted
-          autoPlay
-        />
-        {/* Connection to VisionOverlay: It must also use object-cover to match video cropping */}
-        {visionData && (
-          <VisionOverlay
-            data={visionData}
-            width={videoDimensions.width}
-            height={videoDimensions.height}
-            showVelocity={showVelocity}
-            isMirrored={true}
-          />
-        )}
-
-        {/* [NEW] Velocity Toggle Button */}
-        <button
-          onClick={() => {
-            const newState = !showVelocity;
-            setShowVelocity(newState);
-            // Trigger Lazy Load of TFJS if needed
-            if (newState) visionService.initialize(true);
+      {/* Main Camera View - "Virtual Screen" Cover Layout */}
+      {/* 
+          This layout simulates 'object-fit: cover' using DOM elements. 
+          The Inner Div is forced to maintain 16:9 aspect ratio and always cover the viewport.
+          This ensures the Video and Overlay inside it share the exact same coordinate space 
+          regardless of browser resizing or intrinsic resolution differences.
+      */}
+      <div className={`absolute inset-0 overflow-hidden flex items-center justify-center bg-black group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
+        <div
+          className="relative flex-none min-w-full min-h-full"
+          style={{
+            aspectRatio: videoAspectRatio,
+            // If screen is wider/taller than aspect ratio, scale up to cover
+            // This is handled by min-w/min-h + flex center.
+            // Note: We might need a media query or JS to ensure it behaves like 'cover'.
+            // actually 'min-w-full min-h-full' with aspect-ratio only works if the parent allows overflow.
+            // Parent is overflow-hidden.
           }}
-          className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
         >
-          <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
-        </button>
+          <video
+            ref={videoRef}
+            className="absolute inset-0 w-full h-full object-fill transform scale-x-[-1]"
+            playsInline
+            muted
+            autoPlay
+          />
+          {/* VisionOverlay matches parent size exactly */}
+          {visionData && (
+            <VisionOverlay
+              data={visionData}
+              width={videoDimensions.width}
+              height={videoDimensions.height}
+              showVelocity={showVelocity}
+              isMirrored={true}
+            />
+          )}
 
-        {/* [NEW] Calibration Indicator */}
-        {isCalibrated && showVelocity && (
-          <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
-            <Ruler size={12} /> CALIBRATED
-          </div>
-        )}
+          {/* [NEW] Velocity Toggle Button */}
+          <button
+            onClick={() => {
+              const newState = !showVelocity;
+              setShowVelocity(newState);
+              // Trigger Lazy Load of TFJS if needed
+              if (newState) visionService.initialize(true);
+            }}
+            className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
+          >
+            <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
+          </button>
 
-        {/* Skin Celebration Effect */}
-        {showCelebrate && <div className="celebration-burst" />}
+          {/* [NEW] Calibration Indicator */}
+          {isCalibrated && showVelocity && (
+            <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
+              <Ruler size={12} /> CALIBRATED
+            </div>
+          )}
+
+          {/* Skin Celebration Effect */}
+          {showCelebrate && <div className="celebration-burst" />}
+        </div>
       </div>
 
       {/* Skin Selector (Bottom Center) - Controlled by showSkins */}
