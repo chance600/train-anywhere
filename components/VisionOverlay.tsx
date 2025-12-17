@@ -29,8 +29,8 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
         ctx.clearRect(0, 0, width, height);
 
         // Coordinate Transformation Helper
-        // Revert to manual flip for precise alignment
-        const transformX = (x: number) => isMirrored ? width - (x * width) : x * width;
+        // Standard mapping (CSS handles the mirror flip)
+        const transformX = (x: number) => x * width;
         const transformY = (y: number) => y * height;
 
         // 1. Draw Skeleton (Classic Debug Style)
@@ -81,10 +81,32 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
             ctx.font = 'bold 24px Courier New';
             ctx.shadowBlur = 0;
 
+            // Note: Canvas is mirrored, so text will be backwards if we just draw it!
+            // We need to un-mirror text drawing context.
+            ctx.save();
+            if (isMirrored) {
+                ctx.scale(-1, 1);
+                ctx.translate(-width, 0);
+            }
+
             const velText = `${data.velocity.velocity.toFixed(2)} m/s`;
             const powerText = data.velocity.powerWatts ? `${data.velocity.powerWatts.toFixed(0)} W` : '';
 
-            // Draw top right corner
+            // Draw top right corner (Now visually correct because context is flipped back)
+            // Wait, if canvas is flipped by CSS, the text drawn normally is flipped.
+            // If we flip the Context inside, we are double flipping?
+            // No, CSS flips the whole element. 
+            // So if I draw "ABC", user sees "CBA".
+            // To fix this, I have to draw "CBA" so user sees "ABC".
+            // OR I can just make the text a DOM overlay instead of canvas?
+            // Actually, for simplicity, I should just draw text normally and accept it's flipped for now,
+            // OR flip the context.
+            // Let's try flipping the context for text.
+
+            // Actually, keep it simple. Let's stick with the DOM mirroring strategy and just flip the context for text.
+            ctx.scale(-1, 1);
+            ctx.translate(-width, 0);
+
             ctx.fillText("VELOCITY: " + velText, 20, 40);
             if (powerText) ctx.fillText("POWER:    " + powerText, 20, 70);
 
@@ -93,8 +115,8 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
                 ctx.font = 'bold 32px Impact';
                 ctx.rotate(-0.1);
                 ctx.fillText("EXPLOSIVE!", width / 2 - 100, height - 100);
-                ctx.rotate(0.1);
             }
+            ctx.restore();
         }
 
         ctx.restore();
@@ -107,6 +129,7 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
             width={width}
             height={height}
             className="absolute inset-0 pointer-events-none z-10"
+            style={{ transform: isMirrored ? 'scaleX(-1)' : 'none' }}
         />
     );
 };
