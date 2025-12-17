@@ -128,7 +128,7 @@ const VisionOverlay: React.FC<VisionOverlayProps> = ({
             ref={canvasRef}
             width={width}
             height={height}
-            className="absolute inset-0 pointer-events-none z-10"
+            className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"
             style={{ transform: isMirrored ? 'scaleX(-1)' : 'none' }}
         />
     );

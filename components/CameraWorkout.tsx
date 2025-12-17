@@ -888,53 +888,49 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         </button>
       )}
 
-      {/* Main Camera View - The "Stage" */}
-      <div className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden">
-        <div
-          className={`relative max-w-full max-h-full ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}
-          style={{ aspectRatio: videoAspectRatio }}
-        >
-          <video
-            ref={videoRef}
-            className="w-full h-full object-contain transform scale-x-[-1]"
-            playsInline
-            muted
-            autoPlay
+      {/* Main Camera View - Full Screen Immersive */}
+      {/* We use object-cover for BOTH video and overlay to ensure they crop identically */}
+      <div className={`relative w-full h-full bg-black overflow-hidden group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}>
+        <video
+          ref={videoRef}
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
+          playsInline
+          muted
+          autoPlay
+        />
+        {/* Connection to VisionOverlay: It must also use object-cover to match video cropping */}
+        {visionData && (
+          <VisionOverlay
+            data={visionData}
+            width={videoDimensions.width}
+            height={videoDimensions.height}
+            showVelocity={showVelocity}
+            isMirrored={true}
           />
-          {/* REPLACED Old Canvas with VisionOverlay */}
-          {visionData && (
-            <VisionOverlay
-              data={visionData}
-              width={videoDimensions.width}
-              height={videoDimensions.height}
-              showVelocity={showVelocity}
-              isMirrored={true}
-            />
-          )}
+        )}
 
-          {/* [NEW] Velocity Toggle Button */}
-          <button
-            onClick={() => {
-              const newState = !showVelocity;
-              setShowVelocity(newState);
-              // Trigger Lazy Load of TFJS if needed
-              if (newState) visionService.initialize(true);
-            }}
-            className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
-          >
-            <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
-          </button>
+        {/* [NEW] Velocity Toggle Button */}
+        <button
+          onClick={() => {
+            const newState = !showVelocity;
+            setShowVelocity(newState);
+            // Trigger Lazy Load of TFJS if needed
+            if (newState) visionService.initialize(true);
+          }}
+          className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
+        >
+          <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
+        </button>
 
-          {/* [NEW] Calibration Indicator */}
-          {isCalibrated && showVelocity && (
-            <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
-              <Ruler size={12} /> CALIBRATED
-            </div>
-          )}
+        {/* [NEW] Calibration Indicator */}
+        {isCalibrated && showVelocity && (
+          <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
+            <Ruler size={12} /> CALIBRATED
+          </div>
+        )}
 
-          {/* Skin Celebration Effect */}
-          {showCelebrate && <div className="celebration-burst" />}
-        </div>
+        {/* Skin Celebration Effect */}
+        {showCelebrate && <div className="celebration-burst" />}
       </div>
 
       {/* Skin Selector (Bottom Center) - Controlled by showSkins */}
