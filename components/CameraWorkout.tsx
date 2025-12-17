@@ -140,179 +140,13 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
   const [showSkins, setShowSkins] = useState(false); // [NEW] User toggle for skins UI
   const [showCelebrate, setShowCelebrate] = useState(false);
   const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9); // [NEW] Dynamic Aspect Ratio
+  const [videoDimensions, setVideoDimensions] = useState({ width: 640, height: 480 }); // [NEW] Sync Overlay Resolution
   const [sensitivity, setSensitivity] = useState(0); // -20 to +20 degrees
 
   // [NEW] Exercise Locking State
   const [isExerciseLocked, setIsExerciseLocked] = useState(false); // Default false (Auto-detect enabled initially?)
 
-  // [NEW] Vision & Analytics State
-  const [visionData, setVisionData] = useState<VisionData | null>(null);
-  const [showVelocity, setShowVelocity] = useState(false); // Velocity Toggle
-  const [isCalibrated, setIsCalibrated] = useState(false); // Shoulder width calibration
-  const [calibrationProgress, setCalibrationProgress] = useState(0);
-
-  // Analytics Refs
-  const velocityCalcRef = useRef(new VelocityCalculator());
-  const lastMetricsRef = useRef<{ velocity: number, power: number }>({ velocity: 0, power: 0 });
-
-  // Countdown State
-  const [isCountingDown, setIsCountingDown] = useState(false);
-  const [countdown, setCountdown] = useState(3);
-  const [isTrackingActive, setIsTrackingActive] = useState(false);
-
-  const { initializeAudio, decodeAndPlay, stopAll, playDing, audioContext } = useAudio();
-
-  // Refs for loop management to avoid stale closures
-  const frameIntervalRef = useRef<number>();
-  const isConnectedRef = useRef(false);
-
-  // SYNC-TO-REF PATTERN (CRITICAL)
-  const repsRef = useRef(reps);
-  const exerciseRef = useRef(exercise);
-  const feedbackRef = useRef(feedback);
-  const exerciseStateRef = useRef({
-    stage: 'start',
-    lastFeedback: 0,
-    repStartTime: 0,
-    repDurations: [] as number[],
-    currentRepScore: 0
-  });
-  const sensitivityRef = useRef(sensitivity);
-  const isTrackingActiveRef = useRef(isTrackingActive);
-  const sessionHistoryRef = useRef<{ time: string, type: 'rep' | 'warning', detail: string }[]>([]);
-
-  // [NEW] Stability & Debouncing Refs
-  const detectionBufferRef = useRef<string[]>([]);
-  const DETECTION_BUFFER_SIZE = 15; // Require ~0.5s of consistent detection (at 30fps)
-  const lastVisibilityCheckRef = useRef<boolean>(true);
-  const isCalibratedRef = useRef(isCalibrated);
-  const isExerciseLockedRef = useRef(isExerciseLocked);
-
-  // [NEW] Circuit Breaker Refs
-  const sessionStartTimeRef = useRef<number | null>(null);
-  const lastRepTimeRef = useRef<number>(Date.now());
-
-  // Sync state to refs
-  useEffect(() => { repsRef.current = reps; }, [reps]);
-  useEffect(() => { exerciseRef.current = exercise; }, [exercise]);
-  useEffect(() => { feedbackRef.current = feedback; }, [feedback]);
-  useEffect(() => { sensitivityRef.current = sensitivity; }, [sensitivity]);
-  useEffect(() => { isTrackingActiveRef.current = isTrackingActive; }, [isTrackingActive]);
-  useEffect(() => { isCalibratedRef.current = isCalibrated; }, [isCalibrated]);
-  useEffect(() => { isExerciseLockedRef.current = isExerciseLocked; }, [isExerciseLocked]);
-
-  // Rest Timer Effect
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isResting && restTime > 0) {
-      interval = setInterval(() => setRestTime(t => t - 1), 1000);
-    } else if (restTime === 0) {
-      setIsResting(false);
-      setRestTime(60);
-      playDing(); // Alert user rest is over
-    }
-    return () => clearInterval(interval);
-  }, [isResting, restTime, playDing]);
-
-  // Countdown Timer Effect
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isCountingDown && countdown > 0) {
-      interval = setInterval(() => {
-        setCountdown(c => {
-          if (c === 1) {
-            playDingRef.current?.(); // Final beep
-            setIsCountingDown(false);
-            setIsTrackingActive(true);
-            setFeedback('GO! Start your reps!');
-            addLog("Tracking Started");
-
-            // Auto-dismiss "GO!" after 1 second
-            setTimeout(() => setCountdown(-1), 1000);
-            return 0;
-          }
-          playDingRef.current?.(); // Countdown beep
-          return c - 1;
-        });
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isCountingDown, countdown]);
-
-  const startTracking = () => {
-    setReps(0); // Reset reps
-    exerciseStateRef.current = { stage: 'start', lastFeedback: 0, repStartTime: 0, repDurations: [], currentRepScore: 0 };
-    setCountdown(3);
-    setIsCountingDown(true);
-    setIsTrackingActive(false);
-    setIsExerciseLocked(true); // [NEW] Lock exercise when starting
-    setFeedback('Get ready...');
-  };
-
-  const startRest = () => {
-    setIsResting(true);
-    // setRestTime(60); // REMOVE THIS HARDCODED VALUE
-    // We already have restTime state effectively setting the starting time?
-    // Actually, the restTime state IS the current countdown.
-    // If the user adjusted the slider, that's fine, but we need a "duration" state separate from "current time"
-    // OR we just rely on the slider setting the initial value, and then we countdown?
-    // Wait, the slider sets 'restTime'. If we countdown, we are mutating the state that the slider controls.
-    // We need a separate `restDuration` vs `restTimer`.
-    // Let's simplify: The slider sets `restTime`. When we click "Rest", we just start the timer.
-    // But we need to remember what the "reset" value should be.
-    // Let's add a ref or separate state for `targetRestTime`.
-  };
-
-  const addLog = (msg: string) => {
-    setLogs(prev => [new Date().toLocaleTimeString() + ': ' + msg, ...prev.slice(0, 4)]);
-  };
-
-  // Fetch Devices
-  useEffect(() => {
-    navigator.mediaDevices.enumerateDevices().then(devices => {
-      setCameras(devices.filter(d => d.kind === 'videoinput'));
-      setMics(devices.filter(d => d.kind === 'audioinput'));
-    });
-  }, []);
-
-  // [NEW] Circuit Breaker: Auto-disconnect on inactivity or max session time
-  useEffect(() => {
-    const MAX_SESSION_MS = 10 * 60 * 1000; // 10 minutes
-    const INACTIVITY_MS = 2 * 60 * 1000; // 2 minutes
-
-    const checkCircuitBreaker = () => {
-      if (connectionState !== LiveConnectionState.CONNECTED) return;
-      if (sessionStartTimeRef.current === null) return;
-
-      const now = Date.now();
-      const sessionDuration = now - sessionStartTimeRef.current;
-      const timeSinceLastRep = now - lastRepTimeRef.current;
-
-      if (sessionDuration > MAX_SESSION_MS) {
-        addLog("Circuit Breaker: Max Session (10 min)");
-        setFeedback("Auto-disconnected: Max session time reached.");
-        window.location.reload(); // Hard reset
-        return;
-      }
-
-      if (timeSinceLastRep > INACTIVITY_MS && !isResting) {
-        addLog("Circuit Breaker: Inactivity (2 min)");
-        setFeedback("Auto-disconnected: No activity detected.");
-        window.location.reload(); // Hard reset
-      }
-    };
-
-    const interval = setInterval(checkCircuitBreaker, 30000); // Check every 30s
-    return () => clearInterval(interval);
-  }, [connectionState, isResting]);
-
-  // Sync unstable dependencies to refs to avoid restarting the effect
-  const activeSessionPromiseRef = useRef(activeSessionPromise);
-  const playDingRef = useRef(playDing);
-
-  useEffect(() => { activeSessionPromiseRef.current = activeSessionPromise; }, [activeSessionPromise]);
-  useEffect(() => { playDingRef.current = playDing; }, [playDing]);
-
+  // ... (Skipping logic to get to useEffect)
 
   // Initialize Vision Service & Start Loop
   useEffect(() => {
@@ -348,7 +182,10 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
           videoRef.current.srcObject = ms;
           videoRef.current.onloadedmetadata = () => {
             if (videoRef.current) {
-              setVideoAspectRatio(videoRef.current.videoWidth / videoRef.current.videoHeight);
+              const vWidth = videoRef.current.videoWidth;
+              const vHeight = videoRef.current.videoHeight;
+              setVideoAspectRatio(vWidth / vHeight);
+              setVideoDimensions({ width: vWidth, height: vHeight }); // Sync Dimensions
               videoRef.current.play();
             }
             // Start Loop
@@ -896,8 +733,8 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         {visionData && (
           <VisionOverlay
             data={visionData}
-            width={videoRef.current?.videoWidth || 640} // Default fallback
-            height={videoRef.current?.videoHeight || 480}
+            width={videoDimensions.width}
+            height={videoDimensions.height}
             showVelocity={showVelocity}
             isMirrored={true}
           />
