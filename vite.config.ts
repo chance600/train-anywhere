@@ -28,16 +28,11 @@ export default defineConfig(({ mode }) => {
               if (id.includes('@tensorflow') || id.includes('tfjs')) {
                 return 'tensorflow';
               }
-              if (id.includes('@mediapipe') || id.includes('pose-detection')) {
+              if (id.includes('@mediapipe') || id.includes('pose-detection') || id.includes('coco-ssd')) {
                 return 'vision';
               }
-              if (id.includes('@supabase')) {
-                return 'supabase';
-              }
-              if (id.includes('lucide') || id.includes('recharts')) {
-                return 'ui';
-              }
-              return 'vendor'; // All other node_modules go to vendor
+              // CRITICAL: Return undefined for everything else to let Vite/Rollup handle it automatically.
+              // This avoids creating a monolithic 'vendor' chunk that causes circular dependencies.
             }
           }
         }
