@@ -20,13 +20,25 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
-      chunkSizeWarningLimit: 1000,
+      chunkSizeWarningLimit: 1600,
       rollupOptions: {
         output: {
-          manualChunks: {
-            vendor: ['react', 'react-dom'],
-            supabase: ['@supabase/supabase-js'],
-            icons: ['lucide-react']
+          manualChunks: (id) => {
+            if (id.includes('node_modules')) {
+              if (id.includes('@tensorflow') || id.includes('tfjs')) {
+                return 'tensorflow';
+              }
+              if (id.includes('@mediapipe') || id.includes('pose-detection')) {
+                return 'vision';
+              }
+              if (id.includes('@supabase')) {
+                return 'supabase';
+              }
+              if (id.includes('lucide') || id.includes('recharts')) {
+                return 'ui';
+              }
+              return 'vendor'; // All other node_modules go to vendor
+            }
           }
         }
       }
