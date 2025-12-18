@@ -557,52 +557,60 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         </button>
       )}
 
-      {/* Main Camera View */}
-      <div
-        className={`relative w-full bg-black overflow-hidden group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}
-        style={{ aspectRatio: videoAspectRatio }}
-      >
-        <video
-          ref={videoRef}
-          className="absolute inset-0 w-full h-full object-fill transform scale-x-[-1]"
-          playsInline
-          muted
-          autoPlay
-        />
-        {/* REPLACED Old Canvas with VisionOverlay */}
-        {/* REPLACED Old Canvas with VisionOverlay */}
-        {/* Pass Ref instead of Data */}
-        <VisionOverlay
-          dataRef={visionDataRef}
-          width={videoDimensions.width}
-          height={videoDimensions.height}
-          showVelocity={showVelocity} // Props trigger internal re-config, not frame loop
-          isMirrored={true}
-        />
-
-
-        {/* [NEW] Velocity Toggle Button */}
-        <button
-          onClick={() => {
-            const newState = !showVelocity;
-            setShowVelocity(newState);
-            // Trigger Lazy Load of TFJS if needed
-            if (newState) visionService.initialize(true);
+      {/* Main Camera View - Centered & Fitted */}
+      <div className="flex-1 w-full h-full flex items-center justify-center overflow-hidden bg-black relative">
+        <div
+          className={`relative bg-black group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}
+          style={{
+            aspectRatio: videoAspectRatio,
+            maxHeight: '100%',
+            maxWidth: '100%',
+            width: 'auto',
+            height: 'auto'
           }}
-          className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
         >
-          <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
-        </button>
+          <video
+            ref={videoRef}
+            className="block w-full h-full object-cover transform scale-x-[-1]"
+            playsInline
+            muted
+            autoPlay
+          />
+          {/* REPLACED Old Canvas with VisionOverlay */}
+          {/* REPLACED Old Canvas with VisionOverlay */}
+          {/* Pass Ref instead of Data */}
+          <VisionOverlay
+            dataRef={visionDataRef}
+            width={videoDimensions.width}
+            height={videoDimensions.height}
+            showVelocity={showVelocity} // Props trigger internal re-config, not frame loop
+            isMirrored={true}
+          />
 
-        {/* [NEW] Calibration Indicator */}
-        {isCalibrated && showVelocity && (
-          <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
-            <Ruler size={12} /> CALIBRATED
-          </div>
-        )}
 
-        {/* Skin Celebration Effect */}
-        {showCelebrate && <div className="celebration-burst" />}
+          {/* [NEW] Velocity Toggle Button */}
+          <button
+            onClick={() => {
+              const newState = !showVelocity;
+              setShowVelocity(newState);
+              // Trigger Lazy Load of TFJS if needed
+              if (newState) visionService.initialize(true);
+            }}
+            className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
+          >
+            <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
+          </button>
+
+          {/* [NEW] Calibration Indicator */}
+          {isCalibrated && showVelocity && (
+            <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
+              <Ruler size={12} /> CALIBRATED
+            </div>
+          )}
+
+          {/* Skin Celebration Effect */}
+          {showCelebrate && <div className="celebration-burst" />}
+        </div>
       </div>
 
       {/* Skin Selector (Bottom Center) - Controlled by showSkins */}
