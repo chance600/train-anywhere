@@ -139,6 +139,25 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
 
   // [NEW] Smart Weight Logic
   const [showWeightPrompt, setShowWeightPrompt] = useState(false);
+
+  // [NEW] Virtual Cover Sizing
+  const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(null);
+  const [containerDim, setContainerDim] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!containerElement) return;
+
+    const obs = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        setContainerDim({ width, height });
+      }
+    });
+
+    obs.observe(containerElement);
+    return () => obs.disconnect();
+  }, [containerElement]);
+
   const weightedFramesRef = useRef(0);
   useEffect(() => { isTrackingActiveRef.current = isTrackingActive; }, [isTrackingActive]);
   useEffect(() => { isCalibratedRef.current = isCalibrated; }, [isCalibrated]);
@@ -558,20 +577,70 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       )}
 
       {/* Main Camera View - Centered & Fitted */}
-      <div className="flex-1 w-full h-full flex items-center justify-center overflow-hidden bg-black relative">
+      {/* Main Camera View - Centered & Fitted (or Covered in Focus Mode) */}
+      <div
+        ref={setContainerElement}
+        className="flex-1 w-full h-full flex items-center justify-center overflow-hidden bg-black relative"
+      >
         <div
           className={`relative bg-black group ${currentSkin !== 'default' ? `skin-${currentSkin}` : ''}`}
           style={{
-            aspectRatio: videoAspectRatio,
-            maxHeight: '100%',
-            maxWidth: '100%',
-            width: 'auto',
-            height: 'auto'
+            ...(() => {
+              // 1. Safety Check
+              if (!videoAspectRatio) return { width: '100%', height: '100%' };
+
+              // 2. Normal Mode -> Strict Contain (No Cropping)
+              if (!focusMode) {
+                return {
+                  aspectRatio: videoAspectRatio,
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  width: 'auto',
+                  height: 'auto'
+                };
+              }
+
+              // 3. Focus Mode -> Virtual Cover (Explicit Calculation)
+              if (containerDim.width === 0 || containerDim.height === 0) return { opacity: 0 }; // Hide until measured
+
+              const containerAR = containerDim.width / containerDim.height;
+
+              // If Screen is Wider than Video -> Fit Width, Crop Height (Top/Bottom)
+              // Actually: If Screen is Wider (e.g. 21:9 vs 16:9), we need to ZOOM height to fill.
+              // Logic: To COVER, we must be AT LEAST container width AND AT LEAST container height.
+
+              if (containerAR > videoAspectRatio) {
+                // Screen is Wider than Video. 
+                // To cover width, we match width. Height will naturally be LESS if we keep AR? 
+                // No, if screen is wider (2.3) than video (1.7), matching width makes height LARGER?
+                // Wait. 
+                // Width = 1000, Height = 500 (AR 2). Video AR 1.
+                // If we match Height (500), Width is 500. fail to cover width.
+                // If we match Width (1000), Height is 1000. Covers height.
+                // So if Screen AR > Video AR, we match Width.
+
+                return {
+                  width: containerDim.width,
+                  height: containerDim.width / videoAspectRatio,
+                };
+              } else {
+                // Screen is Taller/Narrower than Video. (e.g. Mobile Portait)
+                // Width = 500, Height = 1000 (AR 0.5). Video AR 1.
+                // If we match Width (500), Height is 500. fail to cover height.
+                // If we match Height (1000), Width is 1000. Covers width.
+                // So if Screen AR < Video AR, we match Height.
+
+                return {
+                  width: containerDim.height * videoAspectRatio,
+                  height: containerDim.height
+                };
+              }
+            })()
           }}
         >
           <video
             ref={videoRef}
-            className="block w-full h-full object-cover transform scale-x-[-1]"
+            className="block w-full h-full object-fill transform scale-x-[-1]"
             playsInline
             muted
             autoPlay
