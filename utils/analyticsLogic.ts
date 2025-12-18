@@ -95,11 +95,10 @@ export const detectWeight = (
 ): { isWeighted: boolean, objectName?: string } => {
 
     // 1. Filter for Dumbbells/Weights
-    // CocoSSD classes: 'bottle', 'cup' often proxy for dumbbells in testing. 
-    // Real dumbbells might be classified as 'sports ball', 'bottle', or 'remote'.
-    // We accept generic objects for now or strictly 'dumbbell' if custom model.
+    // Strict Mode: Only allow explicit dumbbells or 'sports ball' (proxy for kettlebells/medicine balls).
+    // Removed: 'bottle', 'cup', 'cell phone' to avoid false positives with water bottles.
     const relevantObjects = objects.filter(obj =>
-        ['bottle', 'cup', 'sports ball', 'dumbbell', 'cell phone'].includes(obj.class)
+        ['sports ball', 'dumbbell'].includes(obj.class)
     );
 
     if (relevantObjects.length === 0 || (!leftWrist && !rightWrist)) {

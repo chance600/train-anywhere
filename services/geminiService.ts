@@ -122,7 +122,72 @@ class GeminiService {
     return response.text;
   }
 
+  // --- Unified File Analysis ---
+  async analyzeFile(file: File): Promise<string> {
+    const base64 = await this.fileToBase64(file);
+    const mimeType = file.type;
+    const isVideo = mimeType.startsWith('video/');
+
+    const prompt = `
+    Analyze this workout media as an elite fitness coach.
+    Provide a structured "Form Critique" in Markdown format:
+    
+    ## 📋 Exercise Identified
+    [Name of exercise]
+
+    ## 🔍 Form Analysis
+    - **Good**: [List positive points]
+    - **Corrections**: [List mistakes]
+
+    ## 🛡️ Safety Score
+    [1-10]/10
+
+    ## 💡 Pro Tip
+    [One actionable tip]
+    `;
+
+    if (isVideo) {
+      return this.analyzeVideo(base64, prompt);
+    } else {
+      // Image Analysis
+      const parts: any[] = [
+        {
+          inlineData: {
+            mimeType: mimeType,
+            data: base64
+          }
+        },
+        { text: prompt }
+      ];
+
+      const response = await this.getClient().models.generateContent({
+        model: MODEL_NAMES.VISION,
+        contents: { parts },
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTIONS.ANALYZER,
+          thinkingConfig: { thinkingBudget: 2048 }
+        }
+      });
+      return response.text;
+    }
+  }
+
+  private fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove data:image/xyz;base64, prefix
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
   // --- Live API Helper ---
+
   // Returns the session object for the component to manage
   getLiveClient() {
     return this.getClient().live;

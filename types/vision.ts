@@ -10,7 +10,7 @@ export interface VisionData {
 
 export interface VelocityMetrics {
     vector: [number, number]; // [vx, vy] in pixels/sec (or normalized meters/sec)
-    magnitude: number;
+    velocity: number;
     isExplosive: boolean;
     powerWatts?: number;
 }

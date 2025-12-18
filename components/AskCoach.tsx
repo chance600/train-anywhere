@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { geminiService } from '../services/geminiService';
+import { supabase } from '../services/supabaseClient'; // [NEW]
 import { ChatMessage } from '../types';
-import { Send, Image as ImageIcon, Loader2, CheckCircle, Calendar } from 'lucide-react';
+import { Send, Image as ImageIcon, Loader2, CheckCircle, Calendar, Sparkles } from 'lucide-react';
 
 const AskCoach: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -11,6 +12,28 @@ const AskCoach: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [analysisContext, setAnalysisContext] = useState<string | null>(null); // [NEW]
+
+  // [NEW] Fetch latest analysis context
+  React.useEffect(() => {
+    const fetchContext = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('analysis_logs')
+        .select('analysis_content, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (data && data.analysis_content) {
+        setAnalysisContext(`User's recent form analysis (${new Date(data.created_at).toLocaleDateString()}): ${data.analysis_content}`);
+      }
+    };
+    fetchContext();
+  }, []);
 
   const handleSend = async () => {
     if ((!input.trim() && !selectedImage) || isLoading) return;
@@ -28,11 +51,19 @@ const AskCoach: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Prepare history for context (excluding images for simple text history, but including current image if present)
+      // Prepare history for context
       const history = messages.filter(m => m.role !== 'user' || !m.image).map(m => ({
         role: m.role,
         parts: [{ text: m.text }]
       }));
+
+      // [NEW] Inject Analysis Context if available
+      if (analysisContext) {
+        history.unshift({
+          role: 'model',
+          parts: [{ text: `[SYSTEM MEMORY] I have access to your recent workout analysis:\n${analysisContext}\nI will use this to guide my advice.` }]
+        });
+      }
 
       const responseText = await geminiService.sendChatMessage(history, userMsg.text, userMsg.image);
 

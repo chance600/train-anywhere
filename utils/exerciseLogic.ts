@@ -206,24 +206,15 @@ export const EXERCISE_CATALOG: Record<string, ExerciseConfig> = {
     name: 'Bicep Curls',
     instruction: "Hold weights with palms facing forward. Curl towards shoulders.",
     calculateProgress: (landmarks: Point[]) => {
-      // Monitor BOTH arms. Count the "most squeezed" arm (min angle).
-      const l_shoulder = landmarks[11];
-      const l_elbow = landmarks[13];
-      const l_wrist = landmarks[15];
-      const l_angle = calculateAngle(l_shoulder, l_elbow, l_wrist);
-
-      const r_shoulder = landmarks[12];
-      const r_elbow = landmarks[14];
-      const r_wrist = landmarks[16];
-      const r_angle = calculateAngle(r_shoulder, r_elbow, r_wrist);
-
-      // Return the most active curl (smallest angle)
-      return Math.min(l_angle, r_angle);
+      const shoulder = landmarks[11];
+      const elbow = landmarks[13];
+      const wrist = landmarks[15];
+      return calculateAngle(shoulder, elbow, wrist);
     },
     thresholds: {
-      start: 145, // Relaxed slightly bent check
-      middle: 50, // Curled up
-      end: 140    // Return down
+      start: 160,
+      middle: 45,
+      end: 150
     }
   },
   'Situps': {
@@ -298,7 +289,6 @@ export const detectExercise = (landmarks: Point[]): string | null => {
   // Calculate key angles and metrics
   const kneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
   const elbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
-  const r_elbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist); // [NEW] Right arm check
   const torsoAngle = calculateAngle(leftShoulder, leftHip, leftAnkle);
   const shoulderHipAngle = calculateAngle(leftElbow, leftShoulder, leftHip);
 
@@ -349,8 +339,7 @@ export const detectExercise = (landmarks: Point[]): string | null => {
   }
 
   // 7. BICEP CURLS: Vertical, elbow bending, upper arm stationary
-  // [MODIFIED] Check either arm
-  if (isVertical && (elbowAngle < 90 || r_elbowAngle < 90) && shoulderHipAngle < 45) {
+  if (isVertical && elbowAngle < 90 && shoulderHipAngle < 30) {
     return 'Bicep Curls';
   }
 
