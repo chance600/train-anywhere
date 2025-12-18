@@ -20,20 +20,13 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
-      chunkSizeWarningLimit: 1600,
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          manualChunks: (id) => {
-            if (id.includes('node_modules')) {
-              if (id.includes('@tensorflow') || id.includes('tfjs')) {
-                return 'tensorflow';
-              }
-              if (id.includes('@mediapipe') || id.includes('pose-detection') || id.includes('coco-ssd')) {
-                return 'vision';
-              }
-              // CRITICAL: Return undefined for everything else to let Vite/Rollup handle it automatically.
-              // This avoids creating a monolithic 'vendor' chunk that causes circular dependencies.
-            }
+          manualChunks: {
+            vendor: ['react', 'react-dom'],
+            supabase: ['@supabase/supabase-js'],
+            icons: ['lucide-react']
           }
         }
       }
