@@ -567,589 +567,597 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             maxWidth: '100%',
             width: 'auto',
             height: 'auto'
+          })
           }}
         >
-          <video
-            ref={videoRef}
-            className="block w-full h-full object-cover transform scale-x-[-1]"
-            playsInline
-            muted
-            autoPlay
-          />
-          {/* REPLACED Old Canvas with VisionOverlay */}
-          {/* REPLACED Old Canvas with VisionOverlay */}
-          {/* Pass Ref instead of Data */}
-          <VisionOverlay
-            dataRef={visionDataRef}
-            width={videoDimensions.width}
-            height={videoDimensions.height}
-            showVelocity={showVelocity} // Props trigger internal re-config, not frame loop
-            isMirrored={true}
-          />
+        {/* VERSION BADGE - VERIFY DEPLOYMENT */}
+        <div className="absolute top-2 left-2 z-50 bg-red-600 text-white text-xs px-2 py-1 rounded font-mono pointer-events-none opacity-50">
+          vFIX-CONTAIN
+        </div>
+
+        <video
+          ref={videoRef}
+          className="block w-full h-full object-contain transform scale-x-[-1]"
+          playsInline
+          muted
+          autoPlay
+        />
+        {/* REPLACED Old Canvas with VisionOverlay */}
+        {/* REPLACED Old Canvas with VisionOverlay */}
+        {/* Pass Ref instead of Data */}
+        <VisionOverlay
+          dataRef={visionDataRef}
+          width={videoDimensions.width}
+          height={videoDimensions.height}
+          showVelocity={showVelocity} // Props trigger internal re-config, not frame loop
+          isMirrored={true}
+        />
 
 
-          {/* [NEW] Velocity Toggle Button */}
-          <button
-            onClick={() => {
-              const newState = !showVelocity;
-              setShowVelocity(newState);
-              // Trigger Lazy Load of TFJS if needed
-              if (newState) visionService.initialize(true);
-            }}
-            className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
-          >
-            <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
-          </button>
+        {/* [NEW] Velocity Toggle Button */}
+        <button
+          onClick={() => {
+            const newState = !showVelocity;
+            setShowVelocity(newState);
+            // Trigger Lazy Load of TFJS if needed
+            if (newState) visionService.initialize(true);
+          }}
+          className={`absolute bottom-4 right-4 z-20 px-3 py-1 rounded-full backdrop-blur-md text-sm transition-all flex items-center gap-2 ${showVelocity ? 'bg-cyan-500/80 text-white' : 'bg-black/40 text-white/50'}`}
+        >
+          <Zap size={16} /> {showVelocity ? 'VELOCITY ON' : 'VELOCITY OFF'}
+        </button>
 
-          {/* [NEW] Calibration Indicator */}
-          {isCalibrated && showVelocity && (
-            <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
-              <Ruler size={12} /> CALIBRATED
+        {/* [NEW] Calibration Indicator */}
+        {isCalibrated && showVelocity && (
+          <div className="absolute bottom-4 left-4 z-20 px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-xs flex items-center gap-1 backdrop-blur-md">
+            <Ruler size={12} /> CALIBRATED
+          </div>
+        )}
+
+        {/* Skin Celebration Effect */}
+        {showCelebrate && <div className="celebration-burst" />}
+      </div>
+    </div>
+
+      {/* Skin Selector (Bottom Center) - Controlled by showSkins */ }
+  {
+    showSkins && !focusMode && (
+      <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-20 pointer-events-auto animate-in slide-in-from-bottom-4 fade-in duration-300">
+        <SkinSelector currentSkin={currentSkin} onSelectSkin={setCurrentSkin} />
+      </div>
+    )
+  }
+
+  {/* Standard Info Overlays (Hidden in Focus Mode) */ }
+  {
+    !focusMode && (
+      <>
+        <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
+          <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${isTrackingActive ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
+            <p className="text-white font-mono text-sm">{isTrackingActive ? "TRACKING ACTIVE" : "READY"}</p>
+          </div>
+          {!EXERCISE_CATALOG[exercise] && (
+            <div className="mt-1 px-1.5 py-0.5 bg-blue-500/20 border border-blue-500/30 rounded text-[10px] text-blue-300 font-mono">
+              Universal Vision Mode
             </div>
           )}
-
-          {/* Skin Celebration Effect */}
-          {showCelebrate && <div className="celebration-burst" />}
         </div>
-      </div>
 
-      {/* Skin Selector (Bottom Center) - Controlled by showSkins */}
-      {
-        showSkins && !focusMode && (
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-20 pointer-events-auto animate-in slide-in-from-bottom-4 fade-in duration-300">
-            <SkinSelector currentSkin={currentSkin} onSelectSkin={setCurrentSkin} />
+        {/* Standard Rep Counter (Top Right) */}
+        <div className="absolute top-4 right-4 flex gap-2">
+          <div
+            onClick={() => setIsWeightInputOpen(true)}
+            className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-center min-w-[60px] cursor-pointer hover:bg-black/80 transition-colors"
+            role="button"
+            aria-label="Set Weight"
+          >
+            <div className="text-2xl font-bold text-white leading-none">{weight}</div>
+            <div className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">Lbs</div>
           </div>
-        )
-      }
 
-      {/* Standard Info Overlays (Hidden in Focus Mode) */}
-      {
-        !focusMode && (
-          <>
-            <div className="absolute top-4 left-4 bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10">
-              <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">AI Vision</p>
-              <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isTrackingActive ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
-                <p className="text-white font-mono text-sm">{isTrackingActive ? "TRACKING ACTIVE" : "READY"}</p>
-              </div>
-              {!EXERCISE_CATALOG[exercise] && (
-                <div className="mt-1 px-1.5 py-0.5 bg-blue-500/20 border border-blue-500/30 rounded text-[10px] text-blue-300 font-mono">
-                  Universal Vision Mode
-                </div>
-              )}
-            </div>
-
-            {/* Standard Rep Counter (Top Right) */}
-            <div className="absolute top-4 right-4 flex gap-2">
-              <div
-                onClick={() => setIsWeightInputOpen(true)}
-                className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-center min-w-[60px] cursor-pointer hover:bg-black/80 transition-colors"
-                role="button"
-                aria-label="Set Weight"
-              >
-                <div className="text-2xl font-bold text-white leading-none">{weight}</div>
-                <div className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">Lbs</div>
-              </div>
-
-              <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-right min-w-[60px]">
-                <div className="text-2xl font-bold text-white leading-none">{reps}</div>
-                <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Reps</div>
-              </div>
-
-              {/* TEMPO TRACKING [NEW] */}
-              <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-center min-w-[70px]">
-                <div className="text-2xl font-bold text-amber-400 leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {lastRepDuration ? lastRepDuration.toFixed(1) : '--'}
-                </div>
-                <div className="text-[10px] text-amber-400/70 font-bold uppercase tracking-wider">Last (s)</div>
-                {avgRepDuration && (
-                  <div className="text-[9px] text-gray-400 mt-0.5">
-                    Avg: {avgRepDuration.toFixed(1)}s
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Debug Log Removed */}
-          </>
-        )
-      }
-
-      {/* Countdown Overlay */}
-      {
-        (isCountingDown || countdown === 0) && (
-          <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-            <div className="text-center">
-              {countdown > 0 ? (
-                <>
-                  <div className="text-9xl font-bold text-emerald-400 animate-pulse" style={{ textShadow: '0 0 40px rgba(16, 185, 129, 0.8)' }}>
-                    {countdown}
-                  </div>
-                  <div className="text-2xl text-white mt-4 font-bold drop-shadow-md">Get Ready...</div>
-                </>
-              ) : (
-                <div className="text-8xl font-bold text-green-500 animate-bounce" style={{ textShadow: '0 0 60px rgba(34, 197, 94, 1)' }}>
-                  GO!
-                </div>
-              )}
-            </div>
+          <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-right min-w-[60px]">
+            <div className="text-2xl font-bold text-white leading-none">{reps}</div>
+            <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Reps</div>
           </div>
-        )
-      }
 
-      {/* Feedback Overlay */}
-      <div className={`absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300 ${!feedback ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
-        <p className="text-white text-center font-medium animate-pulse text-lg">{feedback || "Keep moving..."}</p>
-      </div>
-
-      {/* PAUSED OVERLAY */}
-      {isPaused && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30 backdrop-blur-sm">
-          <div className="bg-black/80 px-8 py-6 rounded-2xl border border-yellow-500/30 flex flex-col items-center">
-            <span className="font-mono text-4xl text-yellow-400 font-bold mb-2">PAUSED</span>
-            <p className="text-gray-400 text-xs uppercase tracking-widest">Resume to continue</p>
+          {/* TEMPO TRACKING [NEW] */}
+          <div className="bg-black/60 p-2 rounded-lg backdrop-blur-sm z-10 text-center min-w-[70px]">
+            <div className="text-2xl font-bold text-amber-400 leading-none" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {lastRepDuration ? lastRepDuration.toFixed(1) : '--'}
+            </div>
+            <div className="text-[10px] text-amber-400/70 font-bold uppercase tracking-wider">Last (s)</div>
+            {avgRepDuration && (
+              <div className="text-[9px] text-gray-400 mt-0.5">
+                Avg: {avgRepDuration.toFixed(1)}s
+              </div>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Focus Mode Specific Overlays */}
-      {
-        focusMode && (
-          <div className="absolute inset-0 z-50 pointer-events-none">
-            {/* Top Bar Stats */}
-            <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start z-30 bg-gradient-to-b from-black/80 to-transparent">
-              <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 pointer-events-auto">
-                <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {reps}
-                </div>
-                <div className="text-emerald-400 font-bold text-sm tracking-widest uppercase">Reps</div>
-              </div>
+        {/* Debug Log Removed */}
+      </>
+    )
+  }
 
-              {/* WEIGHT CONTROL [NEW] */}
-              <div
-                onClick={() => {
-                  const newWeight = prompt("Enter weight (lbs):", weight.toString());
-                  if (newWeight && !isNaN(Number(newWeight))) setWeight(Number(newWeight));
-                }}
-                className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center pointer-events-auto cursor-pointer hover:bg-white/10 transition-colors"
-              >
-                <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {weight}
-                </div>
-                <div className="text-blue-400 font-bold text-sm tracking-widest uppercase">Lbs</div>
+  {/* Countdown Overlay */ }
+  {
+    (isCountingDown || countdown === 0) && (
+      <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+        <div className="text-center">
+          {countdown > 0 ? (
+            <>
+              <div className="text-9xl font-bold text-emerald-400 animate-pulse" style={{ textShadow: '0 0 40px rgba(16, 185, 129, 0.8)' }}>
+                {countdown}
               </div>
-
-              <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-right pointer-events-auto">
-                <div className={`text-4xl font-bold mb-1 ${lastRepScore && lastRepScore > 80 ? 'text-emerald-400' : lastRepScore && lastRepScore > 50 ? 'text-yellow-400' : 'text-red-400'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {lastRepScore || '--'}
-                </div>
-                <div className="text-gray-400 font-bold text-sm tracking-widest uppercase">Form Score</div>
-              </div>
-
-              {/* TEMPO TRACKING - Focus Mode [NEW] */}
-              <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center pointer-events-auto">
-                <div className="text-4xl font-bold text-amber-400 mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {lastRepDuration ? lastRepDuration.toFixed(1) : '--'}
-                </div>
-                <div className="text-amber-400/70 font-bold text-sm tracking-widest uppercase">Tempo (s)</div>
-                {avgRepDuration && (
-                  <div className="text-xs text-gray-400 mt-1">
-                    Avg: {avgRepDuration.toFixed(1)}s
-                  </div>
-                )}
-              </div>
+              <div className="text-2xl text-white mt-4 font-bold drop-shadow-md">Get Ready...</div>
+            </>
+          ) : (
+            <div className="text-8xl font-bold text-green-500 animate-bounce" style={{ textShadow: '0 0 60px rgba(34, 197, 94, 1)' }}>
+              GO!
             </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
-            {/* Exit Button - Floating at bottom */}
-            <div className="absolute bottom-10 left-0 right-0 flex justify-center z-50 pointer-events-auto">
-              <button
-                onClick={() => toggleFocus(false)}
-                className="group bg-black/40 hover:bg-red-500/80 text-white/80 hover:text-white px-6 py-3 rounded-full backdrop-blur-md transition-all border border-white/10 hover:border-red-400 shadow-2xl flex items-center gap-3"
-              >
-                <EyeOff size={20} className="group-hover:scale-110 transition-transform" />
-                <span className="font-medium tracking-wide text-sm">EXIT FOCUS</span>
-              </button>
+  {/* Feedback Overlay */ }
+  <div className={`absolute bottom-4 left-4 right-4 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-gray-700 z-10 transition-all duration-300 ${!feedback ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
+    <p className="text-white text-center font-medium animate-pulse text-lg">{feedback || "Keep moving..."}</p>
+  </div>
+
+  {/* PAUSED OVERLAY */ }
+  {
+    isPaused && (
+      <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30 backdrop-blur-sm">
+        <div className="bg-black/80 px-8 py-6 rounded-2xl border border-yellow-500/30 flex flex-col items-center">
+          <span className="font-mono text-4xl text-yellow-400 font-bold mb-2">PAUSED</span>
+          <p className="text-gray-400 text-xs uppercase tracking-widest">Resume to continue</p>
+        </div>
+      </div>
+    )
+  }
+
+  {/* Focus Mode Specific Overlays */ }
+  {
+    focusMode && (
+      <div className="absolute inset-0 z-50 pointer-events-none">
+        {/* Top Bar Stats */}
+        <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start z-30 bg-gradient-to-b from-black/80 to-transparent">
+          <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 pointer-events-auto">
+            <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {reps}
             </div>
+            <div className="text-emerald-400 font-bold text-sm tracking-widest uppercase">Reps</div>
           </div>
-        )
-      }
+
+          {/* WEIGHT CONTROL [NEW] */}
+          <div
+            onClick={() => {
+              const newWeight = prompt("Enter weight (lbs):", weight.toString());
+              if (newWeight && !isNaN(Number(newWeight))) setWeight(Number(newWeight));
+            }}
+            className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center pointer-events-auto cursor-pointer hover:bg-white/10 transition-colors"
+          >
+            <div className="text-5xl font-bold text-white mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {weight}
+            </div>
+            <div className="text-blue-400 font-bold text-sm tracking-widest uppercase">Lbs</div>
+          </div>
+
+          <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-right pointer-events-auto">
+            <div className={`text-4xl font-bold mb-1 ${lastRepScore && lastRepScore > 80 ? 'text-emerald-400' : lastRepScore && lastRepScore > 50 ? 'text-yellow-400' : 'text-red-400'}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {lastRepScore || '--'}
+            </div>
+            <div className="text-gray-400 font-bold text-sm tracking-widest uppercase">Form Score</div>
+          </div>
+
+          {/* TEMPO TRACKING - Focus Mode [NEW] */}
+          <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10 text-center pointer-events-auto">
+            <div className="text-4xl font-bold text-amber-400 mb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {lastRepDuration ? lastRepDuration.toFixed(1) : '--'}
+            </div>
+            <div className="text-amber-400/70 font-bold text-sm tracking-widest uppercase">Tempo (s)</div>
+            {avgRepDuration && (
+              <div className="text-xs text-gray-400 mt-1">
+                Avg: {avgRepDuration.toFixed(1)}s
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Exit Button - Floating at bottom */}
+        <div className="absolute bottom-10 left-0 right-0 flex justify-center z-50 pointer-events-auto">
+          <button
+            onClick={() => toggleFocus(false)}
+            className="group bg-black/40 hover:bg-red-500/80 text-white/80 hover:text-white px-6 py-3 rounded-full backdrop-blur-md transition-all border border-white/10 hover:border-red-400 shadow-2xl flex items-center gap-3"
+          >
+            <EyeOff size={20} className="group-hover:scale-110 transition-transform" />
+            <span className="font-medium tracking-wide text-sm">EXIT FOCUS</span>
+          </button>
+        </div>
+      </div>
+    )
+  }
     </div >
   );
 
 
 
-  return (
-    <div className="flex flex-col h-full bg-gray-900 relative">
-      {/* Normal Render */}
-      {cameraLayer}
+return (
+  <div className="flex flex-col h-full bg-gray-900 relative">
+    {/* Normal Render */}
+    {cameraLayer}
 
-      {/* Settings Modal */}
-      {showSettings && (
-        <div className="absolute inset-0 bg-black/95 z-50 flex items-center justify-center p-4 sm:p-6">
-          <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl w-full max-w-md border border-gray-700 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-2xl sm:text-xl font-bold text-white mb-6 sm:mb-4 flex items-center gap-2">
-              <Settings size={24} /> Settings
-            </h3>
+    {/* Settings Modal */}
+    {showSettings && (
+      <div className="absolute inset-0 bg-black/95 z-50 flex items-center justify-center p-4 sm:p-6">
+        <div className="bg-gray-800 p-6 sm:p-8 rounded-2xl w-full max-w-md border border-gray-700 max-h-[90vh] overflow-y-auto">
+          <h3 className="text-2xl sm:text-xl font-bold text-white mb-6 sm:mb-4 flex items-center gap-2">
+            <Settings size={24} /> Settings
+          </h3>
 
-            <div className="space-y-6 sm:space-y-4">
-              <div>
-                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Camera</label>
-                <select
-                  value={selectedCamera}
-                  onChange={(e) => { setSelectedCamera(e.target.value); }}
-                  className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
-                >
-                  {cameras.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0, 5)}`}</option>)}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Microphone</label>
-                <select
-                  value={selectedMic}
-                  onChange={(e) => setSelectedMic(e.target.value)}
-                  className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
-                >
-                  {mics.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Mic ${d.deviceId.slice(0, 5)}`}</option>)}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
-                  Sensitivity Correction ({sensitivity > 0 ? '+' : ''}{sensitivity}°)
-                </label>
-                <input
-                  type="range"
-                  min="-20"
-                  max="20"
-                  value={sensitivity}
-                  onChange={(e) => setSensitivity(Number(e.target.value))}
-                  className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                />
-                <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Adjust if reps are too hard/easy to register.</p>
-              </div>
-
-              {/* Adjustable Rest Timer */}
-              <div>
-                <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
-                  Rest Timer Duration ({restDuration}s)
-                </label>
-                <input
-                  type="range"
-                  min="15"
-                  max="180"
-                  step="15"
-                  value={restDuration}
-                  onChange={(e) => setRestDuration(Number(e.target.value))}
-                  className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                />
-                <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Time for rest between sets.</p>
-              </div>
+          <div className="space-y-6 sm:space-y-4">
+            <div>
+              <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Camera</label>
+              <select
+                value={selectedCamera}
+                onChange={(e) => { setSelectedCamera(e.target.value); }}
+                className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
+              >
+                {cameras.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0, 5)}`}</option>)}
+              </select>
             </div>
 
-            <button
-              onClick={() => setShowSettings(false)}
-              className="w-full mt-8 sm:mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 sm:py-3 rounded-xl text-base sm:text-sm min-h-[52px]"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
+            <div>
+              <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-2 font-bold">Microphone</label>
+              <select
+                value={selectedMic}
+                onChange={(e) => setSelectedMic(e.target.value)}
+                className="w-full bg-gray-700 text-white p-4 sm:p-3 rounded-lg text-base sm:text-sm min-h-[48px]"
+              >
+                {mics.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || `Mic ${d.deviceId.slice(0, 5)}`}</option>)}
+              </select>
+            </div>
 
-      {/* Main Container - Adjusted for Focus Mode */}
-      {/* If Focus Mode, we want this to be fixed inset-0 z-50. If not, relative. */}
-      {/* Actually, let's look at where the video is rendered. Line 635. */
+            <div>
+              <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
+                Sensitivity Correction ({sensitivity > 0 ? '+' : ''}{sensitivity}°)
+              </label>
+              <input
+                type="range"
+                min="-20"
+                max="20"
+                value={sensitivity}
+                onChange={(e) => setSensitivity(Number(e.target.value))}
+                className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+              />
+              <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Adjust if reps are too hard/easy to register.</p>
+            </div>
+
+            {/* Adjustable Rest Timer */}
+            <div>
+              <label className="text-sm sm:text-xs text-gray-400 uppercase block mb-3 sm:mb-2 font-bold">
+                Rest Timer Duration ({restDuration}s)
+              </label>
+              <input
+                type="range"
+                min="15"
+                max="180"
+                step="15"
+                value={restDuration}
+                onChange={(e) => setRestDuration(Number(e.target.value))}
+                className="w-full h-3 sm:h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              />
+              <p className="text-xs sm:text-[10px] text-gray-500 mt-2 sm:mt-1">Time for rest between sets.</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowSettings(false)}
+            className="w-full mt-8 sm:mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 sm:py-3 rounded-xl text-base sm:text-sm min-h-[52px]"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    )}
+
+    {/* Main Container - Adjusted for Focus Mode */}
+    {/* If Focus Mode, we want this to be fixed inset-0 z-50. If not, relative. */}
+    {/* Actually, let's look at where the video is rendered. Line 635. */
       /* I need to edit the container class at line 635. Let me make a separate Edit for that. */}
 
-      {/* Controls (Hidden in Focus Mode) */}
-      <div className={`bg-gray-900/95 backdrop-blur-md p-6 rounded-t-3xl shadow-2xl z-20 transition-transform duration-500 border-t border-gray-800 ${focusMode ? 'translate-y-full' : 'translate-y-0'}`}>
-        {/* Top Row: Exercise Selector, Focus Mode, Settings */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex-1 mr-4">
-            <label className="text-gray-400 text-xs uppercase mb-1 flex items-center gap-1 font-bold">
-              Current Exercise
-              Current Exercise
-            </label>
-            <div className="relative">
-              <select
-                value={exercise}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setExercise(val);
-                  if (val === 'Auto-Detect') {
-                    setIsExerciseLocked(false);
-                    setExercise('Squats'); // Default fallback? Or keep 'Auto-Detect' as a special value?
-                    // If 'Auto-Detect' is a value in the dropdown, we need to handle it.
-                    // The currentExercise cannot be 'Auto-Detect' because EXERCISE_CATALOG['Auto-Detect'] doesn't exist.
-                    // So we unlock, but maybe just reset buffer?
-                  } else {
-                    setIsExerciseLocked(true);
-                  }
-                }}
-                className={`w-full bg-black/40 text-white rounded-xl p-4 pr-10 text-lg font-medium appearance-none border transition-all ${isExerciseLocked ? 'border-emerald-500/50 ring-1 ring-emerald-500/20' : 'border-gray-700 focus:border-emerald-500'}`}
-              >
-                <option value="Auto-Detect">Auto-Detect (Unlock)</option>
-                {Object.keys(EXERCISE_CATALOG).filter(k => k !== 'default').map(ex => (
-                  <option key={ex} value={ex}>{ex} {isExerciseLocked && exercise === ex ? '(Locked)' : ''}</option>
-                ))}
-              </select>
-              {isExerciseLocked && (
-                <div className="absolute right-10 top-1/2 transform -translate-y-1/2 pointer-events-none text-emerald-500">
-                  <CheckCircle size={16} />
-                </div>
-              )}
-            </div>
-            {feedback && (
-              <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3 animate-pulse mt-2">
-                <Activity className="text-red-400 w-4 h-4" />
-                <p className="text-red-200 text-sm font-bold">{feedback}</p>
+    {/* Controls (Hidden in Focus Mode) */}
+    <div className={`bg-gray-900/95 backdrop-blur-md p-6 rounded-t-3xl shadow-2xl z-20 transition-transform duration-500 border-t border-gray-800 ${focusMode ? 'translate-y-full' : 'translate-y-0'}`}>
+      {/* Top Row: Exercise Selector, Focus Mode, Settings */}
+      <div className="flex justify-between items-center mb-6">
+        <div className="flex-1 mr-4">
+          <label className="text-gray-400 text-xs uppercase mb-1 flex items-center gap-1 font-bold">
+            Current Exercise
+            Current Exercise
+          </label>
+          <div className="relative">
+            <select
+              value={exercise}
+              onChange={(e) => {
+                const val = e.target.value;
+                setExercise(val);
+                if (val === 'Auto-Detect') {
+                  setIsExerciseLocked(false);
+                  setExercise('Squats'); // Default fallback? Or keep 'Auto-Detect' as a special value?
+                  // If 'Auto-Detect' is a value in the dropdown, we need to handle it.
+                  // The currentExercise cannot be 'Auto-Detect' because EXERCISE_CATALOG['Auto-Detect'] doesn't exist.
+                  // So we unlock, but maybe just reset buffer?
+                } else {
+                  setIsExerciseLocked(true);
+                }
+              }}
+              className={`w-full bg-black/40 text-white rounded-xl p-4 pr-10 text-lg font-medium appearance-none border transition-all ${isExerciseLocked ? 'border-emerald-500/50 ring-1 ring-emerald-500/20' : 'border-gray-700 focus:border-emerald-500'}`}
+            >
+              <option value="Auto-Detect">Auto-Detect (Unlock)</option>
+              {Object.keys(EXERCISE_CATALOG).filter(k => k !== 'default').map(ex => (
+                <option key={ex} value={ex}>{ex} {isExerciseLocked && exercise === ex ? '(Locked)' : ''}</option>
+              ))}
+            </select>
+            {isExerciseLocked && (
+              <div className="absolute right-10 top-1/2 transform -translate-y-1/2 pointer-events-none text-emerald-500">
+                <CheckCircle size={16} />
               </div>
             )}
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                toggleFocus(true);
-                // Trigger browser fullscreen
-                const elem = document.documentElement;
-                if (elem.requestFullscreen) {
-                  elem.requestFullscreen().catch(err => console.log("Fullscreen blocked", err));
-                }
-              }}
-              className="p-4 bg-indigo-600/20 text-indigo-400 rounded-xl hover:bg-indigo-600/30 border border-indigo-600/30 transition-colors"
-              title="Enter Focus Mode"
-            >
-              <Scan size={24} />
-            </button>
-
-            <button
-              onClick={() => setShowSettings(true)}
-              className="p-4 bg-gray-800 text-gray-400 rounded-xl hover:bg-gray-700 hover:text-white transition-colors"
-              aria-label="Settings"
-            >
-              <Settings size={24} />
-            </button>
-            {/* [NEW] Coach's Eye Upload Button */}
-            <button
-              onClick={() => document.getElementById('analysis-upload')?.click()}
-              className="p-4 bg-purple-600/20 text-purple-400 rounded-xl hover:bg-purple-600/30 border border-purple-600/30 transition-colors"
-              title="Coach's Eye (Analyze Upload)"
-            >
-              <FileVideo size={24} />
-            </button>
-            <input
-              type="file"
-              id="analysis-upload"
-              className="hidden"
-              accept="video/*,image/*"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  setIsAnalysisOpen(true);
-                  setIsAnalyzing(true);
-                  try {
-                    // 1. Analyze
-                    const critique = await geminiService.analyzeFile(file);
-                    setAnalysisResult(critique);
-
-                    // 2. Persist to DB (User Request)
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (user) {
-                      const { error } = await supabase.from('analysis_logs').insert({
-                        user_id: user.id,
-                        media_type: file.type.startsWith('video/') ? 'video' : 'image',
-                        analysis_content: critique
-                      });
-                      if (error) console.error("Persistence Error:", error);
-                      else showToast("Analysis Saved to Profile", "success");
-                    }
-                  } catch (err) {
-                    console.error("Analysis Failed", err);
-                    showToast("Analysis Failed. Try a shorter video.", "error");
-                    setIsAnalysisOpen(false);
-                  } finally {
-                    setIsAnalyzing(false);
-                  }
-                }
-              }}
-            />
-          </div>
+          {feedback && (
+            <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3 animate-pulse mt-2">
+              <Activity className="text-red-400 w-4 h-4" />
+              <p className="text-red-200 text-sm font-bold">{feedback}</p>
+            </div>
+          )}
         </div>
 
-        {/* Middle Row: Primary Actions (Start / Rest) */}
-        <div className="flex gap-4 mb-6">
+        <div className="flex items-center gap-2">
           <button
-            onClick={startTracking}
-            disabled={isCountingDown || isTrackingActive}
-            className={`
+            onClick={() => {
+              toggleFocus(true);
+              // Trigger browser fullscreen
+              const elem = document.documentElement;
+              if (elem.requestFullscreen) {
+                elem.requestFullscreen().catch(err => console.log("Fullscreen blocked", err));
+              }
+            }}
+            className="p-4 bg-indigo-600/20 text-indigo-400 rounded-xl hover:bg-indigo-600/30 border border-indigo-600/30 transition-colors"
+            title="Enter Focus Mode"
+          >
+            <Scan size={24} />
+          </button>
+
+          <button
+            onClick={() => setShowSettings(true)}
+            className="p-4 bg-gray-800 text-gray-400 rounded-xl hover:bg-gray-700 hover:text-white transition-colors"
+            aria-label="Settings"
+          >
+            <Settings size={24} />
+          </button>
+          {/* [NEW] Coach's Eye Upload Button */}
+          <button
+            onClick={() => document.getElementById('analysis-upload')?.click()}
+            className="p-4 bg-purple-600/20 text-purple-400 rounded-xl hover:bg-purple-600/30 border border-purple-600/30 transition-colors"
+            title="Coach's Eye (Analyze Upload)"
+          >
+            <FileVideo size={24} />
+          </button>
+          <input
+            type="file"
+            id="analysis-upload"
+            className="hidden"
+            accept="video/*,image/*"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                setIsAnalysisOpen(true);
+                setIsAnalyzing(true);
+                try {
+                  // 1. Analyze
+                  const critique = await geminiService.analyzeFile(file);
+                  setAnalysisResult(critique);
+
+                  // 2. Persist to DB (User Request)
+                  const { data: { user } } = await supabase.auth.getUser();
+                  if (user) {
+                    const { error } = await supabase.from('analysis_logs').insert({
+                      user_id: user.id,
+                      media_type: file.type.startsWith('video/') ? 'video' : 'image',
+                      analysis_content: critique
+                    });
+                    if (error) console.error("Persistence Error:", error);
+                    else showToast("Analysis Saved to Profile", "success");
+                  }
+                } catch (err) {
+                  console.error("Analysis Failed", err);
+                  showToast("Analysis Failed. Try a shorter video.", "error");
+                  setIsAnalysisOpen(false);
+                } finally {
+                  setIsAnalyzing(false);
+                }
+              }
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Middle Row: Primary Actions (Start / Rest) */}
+      <div className="flex gap-4 mb-6">
+        <button
+          onClick={startTracking}
+          disabled={isCountingDown || isTrackingActive}
+          className={`
               relative overflow-hidden group
               ${isTrackingActive ? 'bg-emerald-900/30 border border-emerald-500/50' : 'bg-emerald-600 hover:bg-emerald-500'}
               disabled:opacity-50 disabled:cursor-not-allowed
               text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
             `}
-          >
-            {isTrackingActive ? (
-              <span className="flex items-center gap-2 text-emerald-400">
-                <Activity size={24} className="animate-pulse" /> Active
-              </span>
-            ) : (
-              <span className="flex items-center gap-2 text-lg">
-                <Play size={24} className="fill-current" /> START
-              </span>
-            )}
-          </button>
+        >
+          {isTrackingActive ? (
+            <span className="flex items-center gap-2 text-emerald-400">
+              <Activity size={24} className="animate-pulse" /> Active
+            </span>
+          ) : (
+            <span className="flex items-center gap-2 text-lg">
+              <Play size={24} className="fill-current" /> START
+            </span>
+          )}
+        </button>
 
-          {/* PAUSE BUTTON (Only while Tracking) */}
-          {isTrackingActive && (
-            <button
-              onClick={() => setIsPaused(!isPaused)}
-              className={`
+        {/* PAUSE BUTTON (Only while Tracking) */}
+        {isTrackingActive && (
+          <button
+            onClick={() => setIsPaused(!isPaused)}
+            className={`
                  font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
                  ${isPaused ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 animate-pulse' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}
               `}
-            >
-              {isPaused ? <Play size={24} fill="currentColor" /> : <span className="font-mono text-2xl font-black">||</span>}
-              {isPaused ? "RESUME" : "PAUSE"}
-            </button>
-          )}
+          >
+            {isPaused ? <Play size={24} fill="currentColor" /> : <span className="font-mono text-2xl font-black">||</span>}
+            {isPaused ? "RESUME" : "PAUSE"}
+          </button>
+        )}
 
-          {!isTrackingActive && (
-            <button
-              onClick={startRest}
-              disabled={isResting}
-              className={`
+        {!isTrackingActive && (
+          <button
+            onClick={startRest}
+            disabled={isResting}
+            className={`
               font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-all min-h-[64px]
               ${isResting
-                  ? 'bg-blue-900/30 text-blue-400 border border-blue-500/50'
-                  : 'bg-blue-600 hover:bg-blue-500 text-white'}
+                ? 'bg-blue-900/30 text-blue-400 border border-blue-500/50'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'}
             `}
-            >
-              {isResting ? (
-                <>
-                  <Coffee size={24} className="animate-bounce" /> {restTimer}s
-                </>
-              ) : (
-                <>
-                  <Coffee size={24} /> Rest
-                </>
-              )}
-            </button>
-          )}
+          >
+            {isResting ? (
+              <>
+                <Coffee size={24} className="animate-bounce" /> {restTimer}s
+              </>
+            ) : (
+              <>
+                <Coffee size={24} /> Rest
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Bottom Row: Manual Reps, Coach, Save */}
+      <div className="flex items-center gap-4">
+        {/* Rep Counter */}
+        <div className="flex items-center bg-black/40 rounded-xl p-1 border border-gray-700">
+          <button onClick={() => setReps(Math.max(0, reps - 1))} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
+            <div className="text-xl font-bold">-</div>
+          </button>
+          <div className="flex-1 px-4 text-center">
+            <div className="text-2xl font-bold text-white">{reps}</div>
+          </div>
+          <button onClick={() => setReps(reps + 1)} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
+            <div className="text-xl font-bold">+</div>
+          </button>
         </div>
 
-        {/* Bottom Row: Manual Reps, Coach, Save */}
-        <div className="flex items-center gap-4">
-          {/* Rep Counter */}
-          <div className="flex items-center bg-black/40 rounded-xl p-1 border border-gray-700">
-            <button onClick={() => setReps(Math.max(0, reps - 1))} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
-              <div className="text-xl font-bold">-</div>
-            </button>
-            <div className="flex-1 px-4 text-center">
-              <div className="text-2xl font-bold text-white">{reps}</div>
-            </div>
-            <button onClick={() => setReps(reps + 1)} className="w-12 h-12 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors flex items-center justify-center">
-              <div className="text-xl font-bold">+</div>
-            </button>
+        {/* Main Action Call To Action: Analyze Form (Coach's Eye) */}
+        <button
+          onClick={() => document.getElementById('analysis-upload')?.click()}
+          className="flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all border bg-purple-600/20 text-purple-400 border-purple-600/50 hover:bg-purple-600/30"
+        >
+          <Sparkles size={18} />
+          <span className="text-sm">Analyze Form</span>
+        </button>
+
+        {/* Save Button */}
+        <button
+          onClick={handleSave}
+          disabled={reps === 0}
+          className="w-14 h-14 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 rounded-xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Save Set"
+        >
+          <Save size={24} />
+        </button>
+      </div>
+    </div>
+
+    {/* Smart Weight Prompt Overlay */}
+    {showWeightPrompt && (
+      <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-50 bg-indigo-600 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4">
+        <div className="flex items-center gap-2">
+          <Zap size={20} className="text-yellow-300 fill-yellow-300" />
+          <div>
+            <p className="font-bold text-sm">Weights Detected!</p>
+            <p className="text-[10px] opacity-80">Log mass regarding this set?</p>
           </div>
-
-          {/* Main Action Call To Action: Analyze Form (Coach's Eye) */}
+        </div>
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => document.getElementById('analysis-upload')?.click()}
-            className="flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all border bg-purple-600/20 text-purple-400 border-purple-600/50 hover:bg-purple-600/30"
+            onClick={() => { setShowWeightPrompt(false); setIsWeightInputOpen(true); }}
+            className="bg-white text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-50"
           >
-            <Sparkles size={18} />
-            <span className="text-sm">Analyze Form</span>
+            Set
           </button>
-
-          {/* Save Button */}
           <button
-            onClick={handleSave}
-            disabled={reps === 0}
-            className="w-14 h-14 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 rounded-xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Save Set"
+            onClick={() => setShowWeightPrompt(false)}
+            className="p-1 hover:bg-white/20 rounded-full"
           >
-            <Save size={24} />
+            <CircleX size={16} />
           </button>
         </div>
       </div>
+    )}
 
-      {/* Smart Weight Prompt Overlay */}
-      {showWeightPrompt && (
-        <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-50 bg-indigo-600 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4">
-          <div className="flex items-center gap-2">
-            <Zap size={20} className="text-yellow-300 fill-yellow-300" />
-            <div>
-              <p className="font-bold text-sm">Weights Detected!</p>
-              <p className="text-[10px] opacity-80">Log mass regarding this set?</p>
+    {/* Manual Weight Input Modal */}
+    {isWeightInputOpen && (
+      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+        <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 w-full max-w-xs animate-in zoom-in-95 duration-200">
+          <h3 className="text-xl font-bold text-white mb-4 text-center">Set Weight</h3>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-center gap-2">
+              <button onClick={() => setWeight(Math.max(0, weight - 5))} className="p-3 bg-gray-700 rounded-lg text-white hover:bg-gray-600"><Minus size={20} /></button>
+              <div className="w-24 text-center">
+                <div className="text-4xl font-bold text-white">{weight}</div>
+                <div className="text-xs text-gray-400 uppercase">Lbs</div>
+              </div>
+              <button onClick={() => setWeight(weight + 5)} className="p-3 bg-gray-700 rounded-lg text-white hover:bg-gray-600"><Plus size={20} /></button>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
+
+            <div className="grid grid-cols-3 gap-2 mt-2">
+              {[0, 10, 15, 20, 25, 30, 35, 45, 50].map(w => (
+                <button
+                  key={w}
+                  onClick={() => setWeight(w)}
+                  className={`py-2 rounded-lg text-sm font-medium transition-colors ${weight === w ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                >
+                  {w}
+                </button>
+              ))}
+            </div>
+
             <button
-              onClick={() => { setShowWeightPrompt(false); setIsWeightInputOpen(true); }}
-              className="bg-white text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-50"
+              onClick={() => setIsWeightInputOpen(false)}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mt-2"
             >
-              Set
-            </button>
-            <button
-              onClick={() => setShowWeightPrompt(false)}
-              className="p-1 hover:bg-white/20 rounded-full"
-            >
-              <CircleX size={16} />
+              Confirm
             </button>
           </div>
         </div>
-      )}
+      </div>
+    )}
 
-      {/* Manual Weight Input Modal */}
-      {isWeightInputOpen && (
-        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 w-full max-w-xs animate-in zoom-in-95 duration-200">
-            <h3 className="text-xl font-bold text-white mb-4 text-center">Set Weight</h3>
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-center gap-2">
-                <button onClick={() => setWeight(Math.max(0, weight - 5))} className="p-3 bg-gray-700 rounded-lg text-white hover:bg-gray-600"><Minus size={20} /></button>
-                <div className="w-24 text-center">
-                  <div className="text-4xl font-bold text-white">{weight}</div>
-                  <div className="text-xs text-gray-400 uppercase">Lbs</div>
-                </div>
-                <button onClick={() => setWeight(weight + 5)} className="p-3 bg-gray-700 rounded-lg text-white hover:bg-gray-600"><Plus size={20} /></button>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 mt-2">
-                {[0, 10, 15, 20, 25, 30, 35, 45, 50].map(w => (
-                  <button
-                    key={w}
-                    onClick={() => setWeight(w)}
-                    className={`py-2 rounded-lg text-sm font-medium transition-colors ${weight === w ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
-                  >
-                    {w}
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={() => setIsWeightInputOpen(false)}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mt-2"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Analysis Result Modal */}
-      <AnalysisModal
-        isOpen={isAnalysisOpen}
-        onClose={() => setIsAnalysisOpen(false)}
-        result={analysisResult}
-        isLoading={isAnalyzing}
-      />
-    </div>
-  );
-  return cameraLayer;
+    {/* Analysis Result Modal */}
+    <AnalysisModal
+      isOpen={isAnalysisOpen}
+      onClose={() => setIsAnalysisOpen(false)}
+      result={analysisResult}
+      isLoading={isAnalyzing}
+    />
+  </div>
+);
+return cameraLayer;
 };
 
 export default CameraWorkout;
