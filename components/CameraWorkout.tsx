@@ -569,14 +569,9 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
             height: 'auto'
           }}
         >
-          {/* VERSION BADGE - VERIFY DEPLOYMENT */}
-          <div className="absolute top-2 left-2 z-50 bg-red-600 text-white text-xs px-2 py-1 rounded font-mono pointer-events-none opacity-50">
-            vFIX-CONTAIN
-          </div>
-
           <video
             ref={videoRef}
-            className="block w-full h-full object-contain transform scale-x-[-1]"
+            className="block w-full h-full object-cover transform scale-x-[-1]"
             playsInline
             muted
             autoPlay
@@ -708,16 +703,14 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
       </div>
 
       {/* PAUSED OVERLAY */}
-      {
-        isPaused && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30 backdrop-blur-sm">
-            <div className="bg-black/80 px-8 py-6 rounded-2xl border border-yellow-500/30 flex flex-col items-center">
-              <span className="font-mono text-4xl text-yellow-400 font-bold mb-2">PAUSED</span>
-              <p className="text-gray-400 text-xs uppercase tracking-widest">Resume to continue</p>
-            </div>
+      {isPaused && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30 backdrop-blur-sm">
+          <div className="bg-black/80 px-8 py-6 rounded-2xl border border-yellow-500/30 flex flex-col items-center">
+            <span className="font-mono text-4xl text-yellow-400 font-bold mb-2">PAUSED</span>
+            <p className="text-gray-400 text-xs uppercase tracking-widest">Resume to continue</p>
           </div>
-        )
-      }
+        </div>
+      )}
 
       {/* Focus Mode Specific Overlays */}
       {
