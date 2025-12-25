@@ -571,7 +571,7 @@ const CameraWorkout: React.FC<CameraWorkoutProps> = ({ onSaveWorkout, onFocusCha
         >
           <video
             ref={videoRef}
-            className="block w-full h-full object-cover transform scale-x-[-1]"
+            className="block w-full h-full object-contain transform scale-x-[-1]"
             playsInline
             muted
             autoPlay
