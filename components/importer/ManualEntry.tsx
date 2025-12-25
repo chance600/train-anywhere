@@ -7,6 +7,7 @@ export interface ManualEntryData {
     sets: number;
     reps: number;
     weight: number;
+    created_at?: string; // [NEW] Full timestamp for DB
 }
 
 interface ManualEntryProps {

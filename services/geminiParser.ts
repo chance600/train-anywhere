@@ -3,12 +3,14 @@ import { KeyManager } from './keyManager';
 import { supabase } from './supabaseClient';
 
 export interface ParsedWorkout {
-    date: string;
-    exercises: {
-        name: string;
-        sets: number;
-        reps: number;
-        weight: number;
+    workouts: {
+        date: string;
+        exercises: {
+            name: string;
+            sets: number;
+            reps: number;
+            weight: number;
+        }[];
     }[];
 }
 
@@ -17,27 +19,31 @@ You are an expert fitness coach and data cleaning assistant.
 Your task is to extracting structured workout data from images of workout logs.
 
 The images may be:
-- Handwritten notes (messy, cursive, shorthand)
-- Digital screenshots (Notes app, Excel, specific workout apps)
-- Whiteboard photos
+1. **Single Session**: Handwritten notes, Whiteboard, or App Summary.
+2. **History Feed**: A long screenshot (e.g. infinite scroll) of multiple past workouts (e.g. from Hevy, Strong, Notes).
 
 CRITICAL INSTRUCTIONS:
-1. **Handwriting**: Be extremely resilient to messy handwriting. Look for patterns like "Exerbise Name", numbers indicating sets/reps (e.g. "3x10", "3 sets of 10", "10, 10, 10").
-2. **Dates**: Identify the date of the workout. If ambiguous, look for headers. If NO date is found, strictly return null for the date field. Supports formats like "Mon 12/5", "Oct 20", "Today".
-3. **Structure**: Return a SINGLE valid JSON object. Do NOT include markdown formatting (\`\`\`json).
-4. **Schema**:
+1. **Structure**: Return a SINGLE valid JSON object containing an array of workouts.
+2. **Schema**:
    {
-     "date": "YYYY-MM-DD" or null,
-     "exercises": [
-       { "name": "Standardized Exercise Name", "sets": Number, "reps": Number, "weight": Number (in kg, convert lbs by 0.45 if explicitly lbs) }
+     "workouts": [
+       {
+         "date": "YYYY-MM-DD" or null,
+         "exercises": [
+           { "name": "Standardized Exercise Name", "sets": Number, "reps": Number, "weight": Number (kg) }
+         ]
+       }
      ]
    }
-5. **Refinement**: 
-   - Standardize names (e.g. "Bp" -> "Bench Press", "Squats" -> "Squat").
+3. **Multi-Session Logic**:
+   - If the image contains multiple dates/sessions (e.g. "Monday", "Tuesday"), separate them into distinct objects in the "workouts" array.
+   - Infer dates from headers (e.g. "Yesterday", "Oct 12"). If "Today" is seen, assume the current date is the anchor, but return "Today" string if unsure, or calculate YYYY-MM-DD if context allows. Ideally return ISO date if possible, else original string.
+4. **Refinement**: 
+   - Standardize names (e.g. "Bp" -> "Bench Press").
    - If weight is missing, set to 0.
-   - If multiple sets have different reps, use the average or the most common rep count.
+   - If multiple sets have different reps, use the average.
 
-Extract the data now.
+Extract the data now. Return ONLY valid JSON.
 `;
 
 

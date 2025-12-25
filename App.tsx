@@ -164,7 +164,8 @@ const AppContent: React.FC = () => {
             score: Math.min(Math.max(0, workout.score || 0), 100),
             weight: Math.min(Math.max(0, workout.weight || 0), 9999),
             avg_rep_duration: workout.avgRepDuration || null,
-            duration_seconds: 0
+            duration_seconds: 0,
+            created_at: workout.created_at || new Date().toISOString() // [FIX] Support historical data
           });
         }, { maxRetries: 2 });
 

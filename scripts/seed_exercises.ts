@@ -24,8 +24,8 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !GEMINI_API_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-// const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-// const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
 const EXERCISE_DB_URL = "https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/dist/exercises.json";
 
@@ -56,24 +56,68 @@ async function seed() {
             secondary_muscles: ex.secondaryMuscles || []
         }));
 
-        console.log("🚀 Starting Batch Ingestion...");
+        console.log("🚀 Starting Batch Ingestion with Embeddings...");
 
-        const BATCH_SIZE = 50;
+        const BATCH_SIZE = 20; // Reduced for Embedding Batch Limits
         let successCount = 0;
         let failCount = 0;
 
         for (let i = 0; i < exercises.length; i += BATCH_SIZE) {
             const batch = exercises.slice(i, i + BATCH_SIZE);
 
-            // 1. Upsert Data
+            // 1. Text Data Upsert
             const { error } = await supabase.from('exercises').upsert(batch, { onConflict: 'id' as any });
 
             if (error) {
-                console.error(`❌ Batch ${i} Error:`, error.message);
+                console.error(`❌ Batch ${i} Text Error:`, error.message);
                 failCount += batch.length;
-            } else {
+                continue;
+            }
+
+            // 2. Generate Embeddings (RAG)
+            try {
+                // Construct prompts for embedding: "Name: Squat. Target: Legs. Equipment: Barbell"
+                const textsToEmbed = batch.map(ex =>
+                    `Exercise: ${ex.name}. Target Muscle: ${ex.target}. Equipment: ${ex.equipment}. Body Part: ${ex.body_part}`
+                );
+
+                // Batch Embed call to Gemini
+                // Note: check library version support for batchEmbedContents. If not, use Promise.all.
+                // Assuming newer SDK:
+                // const result = await model.batchEmbedContents({ requests: textsToEmbed.map(t => ({ content: { parts: [{ text: t }] } })) });
+
+                // Fallback to safe Promise.all for older SDK or stability
+                const embeddingsRaw = await Promise.all(textsToEmbed.map(async (text) => {
+                    const res = await model.embedContent(text);
+                    return res.embedding.values;
+                }));
+
+                // 3. Prepare Embedding Rows
+                const embeddingRows = batch.map((ex, idx) => ({
+                    exercise_id: ex.id,
+                    embedding: embeddingsRaw[idx]
+                }));
+
+                // 4. Insert Embeddings (Delete old first? Cascade handles mapping, but upsert is better)
+                // We'll delete existing embeddings for these IDs to avoid duplicates if re-seeding
+                const ids = batch.map(b => b.id);
+                await supabase.from('exercise_embeddings').delete().in('exercise_id', ids);
+
+                const { error: embedError } = await supabase.from('exercise_embeddings').insert(embeddingRows);
+
+                if (embedError) {
+                    console.error(`❌ Batch ${i} Embedding Error:`, embedError.message);
+                    // Non-fatal, but RAG won't work for these.
+                }
+
                 successCount += batch.length;
-                process.stdout.write(`\r✅ Ingested: ${successCount} / ${exercises.length}`);
+                process.stdout.write(`\r✅ Ingested & Embedded: ${successCount} / ${exercises.length}`);
+
+                // Rate Limit safety
+                await sleep(500);
+
+            } catch (embedErr) {
+                console.error(`⚠️ Batch ${i} Embedding Gen Failed:`, embedErr);
             }
         }
 

@@ -95,6 +95,156 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ profile, isPro, subscriptionS
                 <NotificationSettings />
             </div>
 
+            {/* Gym Bag / Context Section */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                    <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 rounded-lg">
+                        <CreditCard size={18} /> {/* Using CreditCard as generic 'Bag' icon or similar layer */}
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-gray-900 dark:text-white">My Gym Bag</h3>
+                        <p className="text-xs text-gray-500">Customize for better AI recommendations.</p>
+                    </div>
+                </div>
+
+                {/* Context Switch */}
+                <div className="flex bg-gray-100 dark:bg-gray-900 p-1 rounded-xl mb-6">
+                    {['Home', 'Gym', 'Travel'].map((mode) => (
+                        <button
+                            key={mode}
+                            onClick={async () => {
+                                if (!profile) return;
+                                const current = profile.fitness_goals || {};
+                                const updated = { ...current, context: mode };
+                                onUpdateProfile({ ...profile, fitness_goals: updated });
+                                await supabase.from('profiles').update({ fitness_goals: updated }).eq('id', profile.id);
+                            }}
+                            className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${(profile?.fitness_goals as any)?.context === mode
+                                ? 'bg-white dark:bg-gray-800 text-emerald-600 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                                }`}
+                        >
+                            {mode}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Equipment Checklist */}
+                <div>
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Available Equipment</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                        {['Dumbbells', 'Barbell', 'Kettlebell', 'Bands', 'Pull-up Bar', 'Bench', 'Cable Machine'].map((item) => {
+                            const currentGoals = (profile?.fitness_goals as any) || {};
+                            const equipment = (currentGoals.equipment || []) as string[];
+                            const hasItem = equipment.includes(item);
+
+                            return (
+                                <button
+                                    key={item}
+                                    onClick={async () => {
+                                        if (!profile) return;
+                                        const newEquip = hasItem
+                                            ? equipment.filter(e => e !== item)
+                                            : [...equipment, item];
+
+                                        const updated = { ...currentGoals, equipment: newEquip };
+                                        onUpdateProfile({ ...profile, fitness_goals: updated });
+                                        await supabase.from('profiles').update({ fitness_goals: updated }).eq('id', profile.id);
+                                    }}
+                                    className={`px-3 py-2 rounded-lg text-sm text-left transition-all border ${hasItem
+                                        ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                                        : 'bg-gray-50 dark:bg-gray-900 border-transparent hover:border-gray-200 text-gray-500'
+                                        }`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${hasItem ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+                                            }`}>
+                                            {hasItem && <CheckCircle size={10} className="text-white" />}
+                                        </div>
+                                        {item}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+
+            {/* Gym Bag / Context Section */}
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                    <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 rounded-lg">
+                        <CreditCard size={18} /> {/* Using CreditCard as generic 'Bag' icon or similar layer */}
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-gray-900 dark:text-white">My Gym Bag</h3>
+                        <p className="text-xs text-gray-500">Customize for better AI recommendations.</p>
+                    </div>
+                </div>
+
+                {/* Context Switch */}
+                <div className="flex bg-gray-100 dark:bg-gray-900 p-1 rounded-xl mb-6">
+                    {['Home', 'Gym', 'Travel'].map((mode) => (
+                        <button
+                            key={mode}
+                            onClick={async () => {
+                                if (!profile) return;
+                                const current = profile.fitness_goals || {};
+                                const updated = { ...current, context: mode };
+                                onUpdateProfile({ ...profile, fitness_goals: updated });
+                                await supabase.from('profiles').update({ fitness_goals: updated }).eq('id', profile.id);
+                            }}
+                            className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${(profile?.fitness_goals as any)?.context === mode
+                                ? 'bg-white dark:bg-gray-800 text-emerald-600 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                                }`}
+                        >
+                            {mode}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Equipment Checklist */}
+                <div>
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Available Equipment</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                        {['Dumbbells', 'Barbell', 'Kettlebell', 'Bands', 'Pull-up Bar', 'Bench', 'Cable Machine'].map((item) => {
+                            const currentGoals = (profile?.fitness_goals as any) || {};
+                            const equipment = (currentGoals.equipment || []) as string[];
+                            const hasItem = equipment.includes(item);
+
+                            return (
+                                <button
+                                    key={item}
+                                    onClick={async () => {
+                                        if (!profile) return;
+                                        const newEquip = hasItem
+                                            ? equipment.filter(e => e !== item)
+                                            : [...equipment, item];
+
+                                        const updated = { ...currentGoals, equipment: newEquip };
+                                        onUpdateProfile({ ...profile, fitness_goals: updated });
+                                        await supabase.from('profiles').update({ fitness_goals: updated }).eq('id', profile.id);
+                                    }}
+                                    className={`px-3 py-2 rounded-lg text-sm text-left transition-all border ${hasItem
+                                        ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                                        : 'bg-gray-50 dark:bg-gray-900 border-transparent hover:border-gray-200 text-gray-500'
+                                        }`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${hasItem ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'
+                                            }`}>
+                                            {hasItem && <CheckCircle size={10} className="text-white" />}
+                                        </div>
+                                        {item}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+
             {/* Developer Keys (BYO) */}
             <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-200 dark:border-gray-700">
                 <div className="flex items-center gap-2 mb-4">

@@ -32,6 +32,46 @@ const CSVImport: React.FC<CSVImportProps> = ({ onSave }) => {
         }
     };
 
+    const smartParse = (line: string, headers: string[]): Partial<ManualEntryData> | null => {
+        const cols = line.split(',').map(s => s.trim().replace(/"/g, '')); // Handle quotes
+        if (cols.length < 3) return null;
+
+        // Strategy: Header Mapping (Case insensitive)
+        const headerMap: Record<string, number> = {};
+        headers.forEach((h, i) => headerMap[h.toLowerCase()] = i);
+
+        // 1. STRONG App / HEVY / FITBOD Detection
+        const getCol = (keys: string[]) => {
+            for (const key of keys) {
+                if (headerMap[key] !== undefined) return cols[headerMap[key]];
+            }
+            return null;
+        };
+
+        const dateStr = getCol(['date', 'start_time', 'start date', 'workout date']);
+        const exerciseName = getCol(['exercise name', 'exercise_name', 'exercise', 'title']);
+        const weightVal = getCol(['weight', 'weight (kg)', 'weight (lbs)']);
+        const repsVal = getCol(['reps', 'reps_count']);
+
+        if (!exerciseName) return null; // Mandatory
+
+        // Date Parsing
+        let cleanDate = new Date().toISOString();
+        if (dateStr) {
+            const d = new Date(dateStr);
+            if (!isNaN(d.getTime())) cleanDate = d.toISOString();
+        }
+
+        return {
+            date: cleanDate, // Full ISO for DB
+            exercise: exerciseName,
+            sets: 1, // CSV lists sets as rows usually
+            reps: parseInt(repsVal || '0') || 0,
+            weight: parseFloat(weightVal || '0') || 0,
+            created_at: cleanDate
+        };
+    };
+
     const processFile = async (file: File) => {
         setFile(file);
         setLoading(true);
@@ -39,25 +79,26 @@ const CSVImport: React.FC<CSVImportProps> = ({ onSave }) => {
         try {
             const text = await file.text();
             const lines = text.split('\n');
+            if (lines.length < 2) throw new Error("File is empty or missing headers");
+
+            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
             const newEntries: ManualEntryData[] = [];
+
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
-                if (!line) continue;
-                const [date, exercise, sets, reps, weight] = line.split(',').map(s => s.trim());
-                if (exercise) {
-                    newEntries.push({
-                        date: date || new Date().toISOString().split('T')[0],
-                        exercise,
-                        sets: parseInt(sets) || 1,
-                        reps: parseInt(reps) || 0,
-                        weight: parseFloat(weight) || 0
-                    });
+                // Handle empty lines or purely comma lines
+                if (!line || line.replace(/,/g, '').trim() === '') continue;
+
+                const parsed = smartParse(line, headers);
+                if (parsed && parsed.exercise) {
+                    newEntries.push(parsed as ManualEntryData);
                 }
             }
-            if (newEntries.length === 0) throw new Error("No valid workouts found in CSV.");
+
+            if (newEntries.length === 0) throw new Error("No valid workouts found. Check headers (Date, Exercise, Weight, Reps).");
             setEntries(newEntries);
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'CSV Error');
+            setError(err instanceof Error ? err.message : 'CSV Import Failed');
             setFile(null);
         } finally {
             setLoading(false);
@@ -67,13 +108,8 @@ const CSVImport: React.FC<CSVImportProps> = ({ onSave }) => {
     return (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="mb-4 p-4 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 rounded-lg text-sm">
-                <p className="font-bold">📊 CSV Import</p>
-                <p className="mt-1">Bulk upload workouts from other apps like Apple Health, Strong, or Hevy.</p>
-            </div>
-
-            <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 rounded-lg text-sm">
-                <p className="font-bold flex items-center gap-2"><AlertCircle size={16} /> CSV Format Required</p>
-                <p className="mt-1">Order: <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">Date, Exercise, Sets, Reps, Weight</code></p>
+                <p className="font-bold">📊 CSV Import (Smart Mode)</p>
+                <p className="mt-1">Auto-detects Strong, Hevy, and Fitbod formats. Just drag & drop!</p>
             </div>
 
             {error && (
@@ -119,7 +155,7 @@ const CSVImport: React.FC<CSVImportProps> = ({ onSave }) => {
                             </div>
                             <div>
                                 <p className="font-bold text-gray-900 dark:text-white">{file.name}</p>
-                                <p className="text-sm text-gray-500">{entries.length} workouts</p>
+                                <p className="text-sm text-gray-500">{entries.length} workouts detected</p>
                             </div>
                         </div>
                         <button onClick={() => { setFile(null); setEntries([]); }} className="text-gray-500 hover:text-red-500"><Trash2 size={20} /></button>
@@ -135,13 +171,18 @@ const CSVImport: React.FC<CSVImportProps> = ({ onSave }) => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                                {entries.map((e, i) => (
+                                {entries.slice(0, 50).map((e, i) => ( // Limit preview for perf
                                     <tr key={i}>
-                                        <td className="p-2 text-gray-500">{e.date}</td>
+                                        <td className="p-2 text-gray-500">{new Date(e.date).toLocaleDateString()}</td>
                                         <td className="p-2 font-medium text-gray-900 dark:text-white">{e.exercise}</td>
                                         <td className="p-2 text-gray-500">{e.sets} x {e.reps} @ {e.weight}kg</td>
                                     </tr>
                                 ))}
+                                {entries.length > 50 && (
+                                    <tr>
+                                        <td colSpan={3} className="p-2 text-center text-gray-500">...and {entries.length - 50} more</td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>

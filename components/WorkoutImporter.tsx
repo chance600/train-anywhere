@@ -4,6 +4,7 @@ import { KeyManager } from '../services/keyManager';
 import ManualEntry, { ManualEntryData } from './importer/ManualEntry';
 import CSVImport from './importer/CSVImport';
 import AIScan from './importer/AIScan';
+import AppleHealthImport from './importer/AppleHealthImport';
 import ExerciseLibrary from './importer/ExerciseLibrary';
 import { useToast } from './Toast';
 
@@ -12,7 +13,7 @@ interface WorkoutImporterProps {
     isPro?: boolean;
 }
 
-type ImportMode = 'ai' | 'manual' | 'csv' | 'library';
+type ImportMode = 'ai' | 'manual' | 'csv' | 'library' | 'apple';
 
 const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete, isPro = false }) => {
     const { showToast } = useToast();
@@ -109,13 +110,21 @@ const WorkoutImporter: React.FC<WorkoutImporterProps> = ({ onImportComplete, isP
                 >
                     Library <span className="ml-1 text-[10px] bg-blue-100 dark:bg-blue-900/40 text-blue-600 px-1.5 py-0.5 rounded-full">NEW</span>
                 </button>
+                <button
+                    onClick={() => setMode('apple')}
+                    className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${mode === 'apple' ? 'bg-white dark:bg-gray-700 shadow-sm text-rose-600 dark:text-rose-400' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'}`}
+                >
+                    Apple Health <span className="ml-1 text-[10px] bg-rose-100 dark:bg-rose-900/40 text-rose-600 px-1.5 py-0.5 rounded-full">NEW</span>
+                </button>
             </div>
 
             <div className="min-h-[400px]">
                 {mode === 'manual' && <ManualEntry onSave={handleSave} />}
                 {mode === 'csv' && <CSVImport onSave={handleSave} />}
+                {mode === 'apple' && <AppleHealthImport onSave={handleSave} />}
                 {mode === 'ai' && <AIScan onSave={handleSave} hasApiKey={hasApiKey} isPro={isPro} />}
                 {mode === 'library' && <ExerciseLibrary />}
+                {mode === 'apple' && <AppleHealthImport onSave={handleSave} />}
             </div>
         </div>
     );

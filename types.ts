@@ -20,6 +20,8 @@ export interface Profile {
   is_public?: boolean;
   stripe_customer_id?: string;
   subscription_status?: 'active' | 'past_due' | 'canceled' | 'trialing' | 'incomplete';
+  // Personalization
+  fitness_goals?: Record<string, any>; // JSONB (includes target_goal, equipment, adaptive_vision_enabled)
 }
 
 export interface Badge {

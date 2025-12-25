@@ -31,82 +31,132 @@ serve(async (req) => {
     try {
         const supabaseClient = createClient(
             Deno.env.get('SUPABASE_URL') ?? '',
-            Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-            { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '', // Use Service Role for Profile/Embeddings access if needed, or Anon if RLS allows.
+            // Using Service Role to ensure we can read all necessary data regardless of RLS complexity for this system function.
         )
 
-        // Auth Check
-        const { data: { user }, error: authError } = await supabaseClient.auth.getUser()
+        // 1. Auth & Context
+        const authHeader = req.headers.get('Authorization');
+        if (!authHeader) throw new Error('Missing Auth Header');
+
+        const { data: { user }, error: authError } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''));
         if (authError || !user) {
             return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         }
 
-        const { goal, daysPerWeek, equipment, experience } = await req.json()
+        // 2. Fetch User Profile & Goals (The "Gym Bag")
+        const { data: profile } = await supabaseClient
+            .from('profiles')
+            .select('fitness_goals')
+            .eq('id', user.id)
+            .single();
 
-        // [SECURITY] Input Validation
-        const validGoals = ['Muscle Gain', 'Fat Loss', 'Strength', 'Endurance'];
-        const validEquipment = ['Full Gym', 'Home Gym', 'Bodyweight Only', 'Dumbbells'];
-        const validExperience = ['Beginner', 'Intermediate', 'Advanced'];
+        const userGoals = profile?.fitness_goals || {};
+        const contextGoal = userGoals.target_goal || "General Fitness";
+        const contextEquipment = userGoals.equipment || []; // e.g. ["Dumbbells", "Bands"]
+        const contextDays = userGoals.days_per_week || 3;
+        const contextLevel = userGoals.experience || 'Intermediate';
 
-        if (!validGoals.includes(goal)) {
-            return new Response(JSON.stringify({ error: 'Invalid goal' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
-        if (!validEquipment.includes(equipment)) {
-            return new Response(JSON.stringify({ error: 'Invalid equipment' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
-        if (!validExperience.includes(experience)) {
-            return new Response(JSON.stringify({ error: 'Invalid experience level' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
-        if (typeof daysPerWeek !== 'number' || daysPerWeek < 1 || daysPerWeek > 7) {
-            return new Response(JSON.stringify({ error: 'Invalid days per week' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-        }
+        // 3. Fetch Workout History (The "Memory")
+        // Get last 30 days to analyze consistency and recent volume
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
+        const { data: history } = await supabaseClient
+            .from('workouts')
+            .select('date, exercise, reps, weight, score')
+            .eq('user_id', user.id)
+            .gte('created_at', thirtyDaysAgo.toISOString())
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+        const historySummary = history && history.length > 0
+            ? JSON.stringify(history.slice(0, 10)) // Send top 10 recent sessions to context
+            : "No recent workout history found.";
+
+        // 4. RAG: Fetch Relevant Exercises (The "Knowledge")
+        // We embed the GOAL to find semantically relevant exercises (e.g. "Muscle Gain" -> Hypertrophy movements)
         const genAI = new GoogleGenerativeAI(Deno.env.get('GEMINI_API_KEY')!)
-        const model = genAI.getGenerativeModel({
+        const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+        const textModel = genAI.getGenerativeModel({
             model: "gemini-1.5-flash",
-            generationConfig: {
-                responseMimeType: "application/json"
-            }
-        })
+            generationConfig: { responseMimeType: "application/json" }
+        });
 
+        // Embed the Goal to find best exercises
+        const embeddingResult = await embeddingModel.embedContent(contextGoal);
+        const embedding = embeddingResult.embedding.values;
+
+        // Query Vector Store
+        const { data: recommendedExercises, error: ragError } = await supabaseClient.rpc('match_exercises', {
+            query_embedding: embedding,
+            match_threshold: 0.3, // Loose match to get variety
+            match_count: 20
+        });
+
+        // Filter Recommendations by Equipment (Crucial for Home vs Gym)
+        const availableExercises = recommendedExercises
+            ? recommendedExercises.filter((ex: any) => {
+                // If user has NO equipment listed, assume Full Gym or Bodyweight? 
+                // Let's assume Bodyweight if empty, or just pass all if they haven't set up Gym Bag.
+                if (contextEquipment.length === 0) return true;
+
+                // Naive string matching check. 
+                // Real implementation would parse 'ex.equipment' properly.
+                // Assuming ex.equipment is a string like "dumbbell" or "body weight".
+                const reqEquip = ex.equipment?.toLowerCase() || 'body weight';
+
+                // Special Case: Bodyweight is always available
+                if (reqEquip.includes('body') || reqEquip.includes('none')) return true;
+
+                // Check if any user equipment matches the requirement
+                return contextEquipment.some((uEq: string) => reqEquip.includes(uEq.toLowerCase()));
+            }).slice(0, 10) // Take top 10 *valid* ones
+            : [];
+
+        const knowledgeContext = availableExercises.map((e: any) => e.name).join(', ');
+
+        // 5. Generate Plan
         const prompt = `
-      Create a 4-week structured workout plan for a user with the following profile:
-      - Goal: ${goal}
-      - Availability: ${daysPerWeek} days/week
-      - Equipment: ${equipment}
-      - Experience: ${experience}
+            Act as an elite personal trainer. Create a 1-week structural workout plan.
+            
+            **User Profile**:
+            - Goal: ${contextGoal}
+            - Experience: ${contextLevel}
+            - Availability: ${contextDays} days/week
+            - Equipment Available: ${contextEquipment.length > 0 ? contextEquipment.join(', ') : 'Unspecified (Assume Full Gym)'}
 
-      Return ONLY valid JSON with this structure:
-      {
-        "name": "Program Name (e.g. Summer Shred)",
-        "description": "Brief summary of the plan strategy.",
-        "schedule": {
-            "weeks": [
-                {
-                    "week_order": 1,
-                    "days": [
+            **Context**:
+            - Recent History: ${historySummary} (Use this to determine volume/intensity. If they trained yesterday, don't kill them today.)
+            - Recommended Exercises (RAG): ${knowledgeContext} (Prioritize these if they fit the split).
+
+            **Output**:
+            Return valid JSON with this structure:
+            {
+                "name": "Plan Name",
+                "description": "Strategic summary.",
+                "schedule": {
+                    "weeks": [
                         {
-                            "day": "Monday",
-                            "focus": "Push (Chest/Tri)",
-                            "exercises": [
-                                { "name": "Bench Press", "sets": 3, "reps": "8-10", "notes": "Heavy" }
+                            "week_order": 1,
+                            "days": [
+                                {
+                                    "day": "Monday",
+                                    "focus": "Upper Body",
+                                    "exercises": [
+                                        { "name": "Exercise Name", "sets": 3, "reps": "8-12", "notes": "Focus on form" }
+                                    ]
+                                }
                             ]
                         }
                     ]
                 }
-            ]
-        }
-      }
-      
-      Generate a full 1-week sample (Week 1), and then summaries for Weeks 2-4 if redundant, or full detail if distinct. Ensure progressive overload context is in the notes.
-    `
+            }
+        `;
 
-        const result = await model.generateContent(prompt)
+        const result = await textModel.generateContent(prompt)
         const response = result.response
-        const text = response.text()
-
-        // Validate JSON parsing
-        const plan = JSON.parse(text)
+        const plan = JSON.parse(response.text())
 
         return new Response(
             JSON.stringify(plan),

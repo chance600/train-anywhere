@@ -103,14 +103,33 @@ const AskCoach: React.FC = () => {
     }
   };
 
-  const generateWeeklyPlan = () => {
-    const history = localStorage.getItem('workout_history');
-    const prompt = `Based on my workout history: ${history || 'No history yet'}, generate a detailed weekly workout plan. 
-    RETURN ONLY VALID JSON (no markdown) in this format: 
-    [
-      { "day": "Monday", "focus": "Legs", "exercises": ["Squats 3x10", "Lunges 3x12"] }
-    ]`;
-    setInput(prompt);
+  const generateWeeklyPlan = async () => {
+    setIsLoading(true);
+    try {
+      // Call the "Brain" (Edge Function with RAG + DB Context)
+      const { data, error } = await supabase.functions.invoke('generate-plan', {
+        body: {} // The function now fetches context (Goals, Gym Bag, History) from the DB automatically.
+      });
+
+      if (error) throw error;
+
+      // Add Model Response with the Plan
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'model',
+        text: JSON.stringify(data) // The Chat UI already knows how to render JSON plans
+      }]);
+
+    } catch (err) {
+      console.error('Plan Generation Failed:', err);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'model',
+        text: "I had trouble accessing your fitness profile to generate a plan. Please try again later."
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

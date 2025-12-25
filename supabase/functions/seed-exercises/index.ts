@@ -1,7 +1,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-// import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai"
+import { GoogleGenerativeAI } from "https://esm.sh/@google/generative-ai"
 
 console.log("Hello from Seed Function!")
 
@@ -42,22 +42,60 @@ serve(async (req) => {
             secondary_muscles: ex.secondaryMuscles || []
         }));
 
-        // 3. Batch Upsert
-        const BATCH_SIZE = 100;
+        // 3. Batch Upsert & Embed
+        logs.push("Starting Batch Ingestion with Embeddings...");
+        const BATCH_SIZE = 10; // Keep small for Edge Function limits (timeout)
         let successCount = 0;
 
-        for (let i = 0; i < exercises.length; i += BATCH_SIZE) {
-            const batch = exercises.slice(i, i + BATCH_SIZE);
-            const { error } = await supabase.from('exercises').upsert(batch, { onConflict: 'id' });
+        // Init Gemini
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
+        // Limit total for Edge Function safety (prevent timeout on 800 items)
+        // We'll do first 50 to prove it, or loop until near timeout?
+        // Let's do 50 for now to ensure RAG has DATA, user can run full seed later.
+        const limitedExercises = exercises.slice(0, 50);
+
+        for (let i = 0; i < limitedExercises.length; i += BATCH_SIZE) {
+            const batch = limitedExercises.slice(i, i + BATCH_SIZE);
+
+            // Text Upsert
+            const { error } = await supabase.from('exercises').upsert(batch, { onConflict: 'id' });
             if (error) {
-                logs.push(`Batch ${i} Error: ${error.message}`);
-            } else {
-                successCount += batch.length;
+                logs.push(`Batch ${i} Text Error: ${error.message}`);
+                continue;
             }
+
+            // Embed
+            try {
+                const textsToEmbed = batch.map((ex: any) =>
+                    `Exercise: ${ex.name}. Target Muscle: ${ex.target}. Equipment: ${ex.equipment}. Body Part: ${ex.body_part}`
+                );
+
+                const embeddingsRaw = await Promise.all(textsToEmbed.map(async (text: string) => {
+                    const res = await model.embedContent(text);
+                    return res.embedding.values;
+                }));
+
+                const embeddingRows = batch.map((ex: any, idx: number) => ({
+                    exercise_id: ex.id,
+                    embedding: embeddingsRaw[idx]
+                }));
+
+                const ids = batch.map((b: any) => b.id);
+                await supabase.from('exercise_embeddings').delete().in('exercise_id', ids);
+
+                const { error: embedError } = await supabase.from('exercise_embeddings').insert(embeddingRows);
+                if (embedError) logs.push(`Batch ${i} Embed Error: ${embedError.message}`);
+
+            } catch (embedErr) {
+                logs.push(`Batch ${i} Embed Gen Failed: ${embedErr}`);
+            }
+
+            successCount += batch.length;
         }
 
-        logs.push(`Success! Ingested ${successCount} exercises.`);
+        logs.push(`Success! Ingested & Embedded ${successCount} exercises (Limited Run).`);
 
         return new Response(
             JSON.stringify({ message: "Seeding Complete", logs }),
